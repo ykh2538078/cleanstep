@@ -1,0 +1,50 @@
+{% macro event_map_link(event) -%}
+    {% if event.latitude is not none and event.longitude is not none %}
+        <a href="https://www.openstreetmap.org/?mlat={{ '%.7f'|format(event.latitude) }}&amp;mlon={{ '%.7f'|format(event.longitude) }}#map=17/{{ '%.7f'|format(event.latitude) }}/{{ '%.7f'|format(event.longitude) }}"
+           target="_blank" rel="noopener noreferrer"
+           style="display:block; width:fit-content; max-width:100%; margin-top:8px; color:#257a52; font-size:13px; font-weight:600; line-height:1.5; text-decoration:underline;">
+            OpenStreetMapで位置を見る
+        </a>
+        <a href="https://www.google.com/maps/search/?api=1&amp;query={{ ('%.7f,%.7f'|format(event.latitude, event.longitude))|urlencode }}"
+           target="_blank" rel="noopener noreferrer"
+           style="display:block; width:fit-content; max-width:100%; margin:8px 0 0; color:#257a52; font-size:13px; font-weight:600; line-height:1.5; text-decoration:underline;">
+            Google Mapsで位置・周辺情報を見る
+        </a>
+    {% elif event.location %}
+        <a href="https://www.openstreetmap.org/search?query={{ event.location|urlencode }}"
+           target="_blank" rel="noopener noreferrer"
+           style="display:block; width:fit-content; max-width:100%; margin-top:8px; color:#257a52; font-size:13px; font-weight:600; line-height:1.5; text-decoration:underline;">
+            OpenStreetMapで場所を検索
+        </a>
+        <a href="https://www.google.com/maps/search/?api=1&amp;query={{ event.location|urlencode }}"
+           target="_blank" rel="noopener noreferrer"
+           style="display:block; width:fit-content; max-width:100%; margin:8px 0 0; color:#257a52; font-size:13px; font-weight:600; line-height:1.5; text-decoration:underline;">
+            Google Mapsで場所を検索
+        </a>
+    {% endif %}
+{%- endmacro %}
+
+{% macro event_map_embed(event) -%}
+    {% if event.latitude is not none and event.longitude is not none %}
+        {% set lat = event.latitude|float %}
+        {% set lng = event.longitude|float %}
+        <div style="position:relative; margin-top:10px; overflow:hidden; border:1px solid #dce5e1; border-radius:10px;">
+            <iframe
+                src="https://www.openstreetmap.org/export/embed.html?bbox={{ '%.6f'|format(lng - 0.004) }},{{ '%.6f'|format(lat - 0.0025) }},{{ '%.6f'|format(lng + 0.004) }},{{ '%.6f'|format(lat + 0.0025) }}&amp;layer=mapnik&amp;marker={{ '%.7f'|format(lat) }},{{ '%.7f'|format(lng) }}"
+                title="{{ event.location }} の地図"
+                width="100%" height="240" style="display:block; border:0;"
+                loading="lazy">
+            </iframe>
+            {{ event_map_link(event) }}
+        </div>
+    {% elif event.location %}
+        <div style="margin-top:10px; padding:12px; border:1px solid #dce5e1; border-radius:10px;">
+            {{ event_map_link(event) }}
+            <p style="margin:0; padding:0 12px 10px; color:#64748b; font-size:12px;">
+                このイベントには地図上の位置が登録されていません。検索結果は目安です。正確なピン位置は主催者・管理者にご確認ください。
+            </p>
+        </div>
+    {% else %}
+        {{ event_map_link(event) }}
+    {% endif %}
+{%- endmacro %}

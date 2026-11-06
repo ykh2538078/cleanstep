@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CleanStep - ごみ箱設置場所編集</title>
+
+    <style>
+        :root {
+            --primary-green: #2b8a3e;
+            --primary-light: #f4fbf6;
+            --bg-gray: #f8f9fa;
+            --border-gray: #dee2e6;
+            --text-dark: #212529;
+            --text-muted: #6c757d;
+            --danger-red: #c0392b;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: var(--bg-gray);
+            color: var(--text-dark);
+            margin: 0;
+            padding: 0;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 30px 20px;
+        }
+
+        /* 🌱 CleanStep カード */
+        .form-card {
+            background: #ffffff;
+            border: 1px solid var(--border-gray);
+            border-radius: 10px;
+            padding: 30px;
+            max-width: 750px;
+            width: 100%;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.04);
+            transition: transform 0.2s ease-out, box-shadow 0.2s ease-out;
+        }
+        .form-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 6px 12px rgba(0,0,0,0.08);
+        }
+
+        /* 🌱 タイトル */
+        .title-area {
+            border-bottom: 1px solid var(--border-gray);
+            padding-bottom: 15px;
+            margin-bottom: 25px;
+        }
+
+        .subtitle {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            font-weight: 700;
+        }
+
+        .title {
+            font-size: 1.4rem;
+            font-weight: 800;
+            margin-top: 6px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        /* 🌱 フォーム */
+        label {
+            font-weight: 700;
+            font-size: 0.9rem;
+            margin-bottom: 6px;
+            display: block;
+        }
+
+        .input-field {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid var(--border-gray);
+            border-radius: 6px;
+            background-color: #ffffff;
+            font-size: 1rem;
+            color: var(--text-dark);
+            box-sizing: border-box;
+            margin-bottom: 15px;
+        }
+
+        /* 🌱 ボタン */
+        .btn {
+            width: 100%;
+            padding: 14px;
+            border-radius: 6px;
+            font-size: 1rem;
+            font-weight: 700;
+            border: none;
+            cursor: pointer;
+        }
+
+        .btn-submit {
+            background-color: var(--primary-green);
+            color: #fff;
+        }
+        .btn-submit:hover {
+            background-color: #256f33;
+        }
+
+        .btn-back {
+            background-color: #e9ecef;
+            color: var(--text-muted);
+        }
+
+        .btn-delete {
+            background-color: var(--danger-red);
+            color: #fff;
+            margin-top: 10px;
+        }
+        .btn-delete:hover {
+            background-color: #a93226;
+        }
+
+        /* レイアウト */
+        .row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+        }
+        .col-half {
+            flex: 1 1 calc(50% - 20px);
+        }
+        .col-full {
+            flex: 1 1 100%;
+        }
+    </style>
+</head>
+
+<body>
+    {% include "_admin_navigation.html" %}
+
+    <div class="form-card">
+
+        <!-- 🌱 タイトル -->
+        <div class="title-area">
+            <span class="subtitle">自治体・地域団体向け 管理用画面</span>
+            <h2 class="title">✏️ ごみ箱設置場所の編集</h2>
+        </div>
+
+        <!-- 🌱 フォーム本体 -->
+        <form action="{{ url_for('edit_bin', bin_id=bin.id) }}" method="POST">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            {% if error_msg %}<p class="input-field" role="alert" style="color:#c0392b;">{{ error_msg }}</p>{% endif %}
+
+            <div class="row">
+
+                <div class="col-half">
+                    <label>設置場所名：</label>
+                    <input type="text" name="name" value="{{ bin.name }}" required class="input-field">
+                </div>
+
+                <div class="col-half">
+                    <label>住所 / 説明：</label>
+                    <input type="text" name="description" value="{{ bin.description }}" required class="input-field">
+                </div>
+
+                {% include "_bin_location_picker.html" %}
+
+            </div>
+
+            <!-- 🌱 ボタン -->
+            <div class="row" style="margin-top: 10px; border-top: 1px solid var(--border-gray); padding-top: 20px;">
+                <div class="col-half">
+                    <a href="{{ url_for('admin_bins') }}" class="btn btn-back" style="display:inline-block; text-decoration:none;">← 設置場所一覧に戻る</a>
+                </div>
+                <div class="col-half">
+                    <button type="submit" class="btn btn-submit">✨ 内容を更新する</button>
+                </div>
+            </div>
+
+        </form>
+
+        <!-- 🌱 削除ボタン -->
+        <form action="{{ url_for('delete_bin', bin_id=bin.id) }}" method="POST" onsubmit="return confirm('本当に削除しますか？');">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit" class="btn btn-delete">🗑 この設置場所を削除する</button>
+        </form>
+
+    </div>
+
+</body>
+</html>

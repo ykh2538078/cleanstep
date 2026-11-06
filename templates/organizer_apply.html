@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>イベント主催者の申請 | CleanStep</title>
+    <style>
+        body { margin: 0; padding: 60px 16px 24px; background: #f4f7f6; color: #263238; font-family: "Yu Gothic", Meiryo, sans-serif; }
+        main { max-width: 640px; margin: 0 auto; padding: 28px; background: #fff; border: 1px solid #dce5e1; border-radius: 8px; }
+        h1 { margin-top: 0; font-size: 1.4rem; }
+        p { line-height: 1.7; }
+        label { display: block; margin: 18px 0 6px; font-weight: 700; }
+        input, textarea { box-sizing: border-box; width: 100%; padding: 11px; border: 1px solid #bac8c2; border-radius: 5px; font: inherit; }
+        textarea { min-height: 120px; resize: vertical; }
+        button, .link { display: inline-block; margin-top: 18px; padding: 11px 16px; border: 0; border-radius: 5px; background: #257a52; color: #fff; font-weight: 700; text-decoration: none; cursor: pointer; }
+        .notice { padding: 14px; background: #eef6f1; border-left: 4px solid #257a52; }
+        .error { color: #a32626; }
+    </style>
+</head>
+<body>
+    {% include "_user_navigation.html" %}
+<main>
+    <h1>地域イベント主催者の申請</h1>
+    <p>町内会・自治会・地域団体など、清掃イベントを主催する団体向けの申請です。承認後も管理できるのは自分が作成したイベントだけです。</p>
+    {% if error_msg %}<p class="error">{{ error_msg }}</p>{% endif %}
+    {% if application and application.status == 'approved' %}
+        <div class="notice">申請は承認済みです。主催者用ページからイベントを管理できます。</div>
+        <a class="link" href="{{ url_for('organizer_dashboard') }}">団体向けメニュー</a>
+    {% elif application and application.status == 'pending' %}
+        <div class="notice">申請を受け付けています。管理者の確認をお待ちください。</div>
+    {% else %}
+        {% if application and application.status == 'rejected' %}<p class="notice">前回の申請は承認されませんでした。内容を見直して再申請できます。</p>{% endif %}
+        <form method="POST" action="{{ url_for('organizer_apply') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <label for="organization_name">団体名</label>
+            <input id="organization_name" name="organization_name" maxlength="100" required value="{{ form_values.organization_name }}">
+            <label for="contact">連絡先（メールアドレスまたは電話番号）</label>
+            <input id="contact" name="contact" maxlength="200" required value="{{ form_values.contact }}">
+            <label for="purpose">活動内容・主催するイベントの概要</label>
+            <textarea id="purpose" name="purpose" maxlength="1000" required>{{ form_values.purpose }}</textarea>
+            <button type="submit">申請する</button>
+        </form>
+    {% endif %}
+    <p><a href="{{ url_for('home') }}">メニューに戻る</a></p>
+</main>
+</body>
+</html>

@@ -1,0 +1,455 @@
+{% from "_event_location_map.html" import event_map_link %}
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
+    <meta name="theme-color" content="#28a745">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CleanStep - メインメニュー</title>
+    <style>
+        body { font-family: 'Helvetica Neue', Arial, sans-serif; margin: 0; padding: 0; background-color: #f4f7f6; color: #333; }
+        .hero-banner { background: linear-gradient(135deg, #2ecc71, #27ae60); color: white; padding: 40px 20px; text-align: center; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+        .hero-banner h1 { margin: 0 0 10px 0; font-size: 32px; letter-spacing: 1px; }
+        .hero-banner p { margin: 0; font-size: 16px; opacity: 0.9; }
+        
+        .container { max-width: 700px; margin: 30px auto; padding: 0 20px; }
+        .user-card { background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.04); margin-bottom: 25px; position: relative; }
+        .user-card h2 { margin: 0 0 15px 0; font-size: 20px; color: #2c3e50; }
+        
+        /* 🪙 ポイント表示エリア */
+        .points-box { display: flex; gap: 15px; margin-top: 15px; }
+        .point-card { flex: 1; background: #f8f9fa; padding: 15px; border-radius: 8px; border-left: 4px solid #2ecc71; }
+        .point-card span { font-size: 12px; color: #7f8c8d; display: block; margin-bottom: 5px; }
+        .point-card strong { font-size: 20px; color: #27ae60; }
+        
+        /* 📸 メインの現場アクションボタン（青: #3498db 基調） */
+        .action-area { text-align: center; margin: 35px 0; }
+        .btn-main { display: inline-block; background-color: #3498db; color: white; padding: 16px 45px; border-radius: 30px; font-size: 18px; font-weight: bold; text-decoration: none; transition: all 0.2s; box-shadow: 0 6px 15px rgba(52,152,219,0.3); }
+        .btn-main:hover { background-color: #2980b9; transform: translateY(-2px); }
+
+        /* 💻 プロフェッショナル機能（PC連携状態） */
+        .pro-section { background: #ebf5fb; border: 1px solid #d4e6f1; border-radius: 12px; padding: 20px; margin-bottom: 30px; text-align: left; }
+        .pro-section h3 { margin: 0 0 10px 0; color: #2980b9; font-size: 16px; }
+        .pro-section p { margin: 0 0 15px 0; font-size: 13px; color: #566573; line-height: 1.5; }
+        .section-title { font-size: 18px; font-weight: bold; margin-bottom: 18px; color: #2c3e50; border-left: 5px solid #2ecc71; padding-left: 10px; text-align: left; }
+        .list-wrapper { background: white; border-radius: 12px; padding: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.04); margin-bottom: 25px; }
+        .list-item { padding: 15px; border-bottom: 1px solid #f2f4f4; display: flex; justify-content: space-between; align-items: center; }
+        .list-item:last-child { border-bottom: none; }
+        .flash-message { position: fixed; z-index: 1100; top: 50%; left: 50%; width: min(720px, calc(100vw - 40px)); box-sizing: border-box; padding: 18px 48px 18px 18px; border-radius: 10px; font-weight: bold; text-align: center; transform: translate(-50%, -50%); box-shadow: 0 12px 35px rgba(0,0,0,.2); }
+        .flash-close { position: absolute; top: 6px; right: 8px; border: 0; background: transparent; color: inherit; font-size: 24px; cursor: pointer; }
+        .flash-success { color: #176b3a; background: #e8f8ee; border: 1px solid #b7e4c7; }
+        .event-list .list-item { transition: transform 0.2s ease, background-color 0.2s ease, box-shadow 0.2s ease; }
+        .event-list .list-item:hover, .event-list .list-item:focus-within { transform: translateY(-2px); background-color: #f5faf7; box-shadow: 0 4px 12px rgba(39, 120, 78, 0.1); }
+        .event-card-info { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+        .event-card-title { display: block; font-size: 15px; color: #2c3e50; }
+        .event-card-meta { display: block; color: #7f8c8d; font-size: 12px; line-height: 1.6; }
+        .event-bonus { display: block; margin-top: 4px; color: #257a52; font-size: 12px; font-weight: bold; }
+        .item-btn { background: #2ecc71; color: white; text-decoration: none; padding: 8px 16px; border-radius: 20px; font-size: 13px; font-weight: bold; }
+        .item-btn:hover { background: #27ae60; }
+        .exchange-btn { margin-top: 14px; padding: 16px 28px; font-size: 17px; }
+
+        @media (prefers-reduced-motion: reduce) {
+            .event-list .list-item { transition: none; }
+            .event-list .list-item:hover, .event-list .list-item:focus-within { transform: none; }
+        }
+        
+        /* 参加済みイベント用のセキュアなバッジスタイル */
+        .item-joined { background: #e5e8e8; color: #7f8c8d; padding: 8px 16px; border-radius: 20px; font-size: 13px; font-weight: bold; cursor: not-allowed; }
+        .item-reserved { background: #e8f8f5; color: #257a52; padding: 6px 10px; border-radius: 6px; font-size: 12px; font-weight: bold; }
+        .reservation-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 10px; flex-shrink: 0; }
+        .event-list-links { display: flex; flex-wrap: wrap; gap: 10px; margin: 0 0 18px; }
+        .event-list-link { text-decoration: none; }
+        .event-list-section + .event-list-section { margin-top: 30px; }
+        .event-list-section > .event-list-link { margin-top: 14px; }
+        .event-empty { color: #95a5a6; padding: 15px; margin: 0; text-align: left; font-size: 14px; }
+        .event-list-section { scroll-margin-top: 16px; }
+
+        .item-btn, .btn-main { min-height: 44px; box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center; }
+
+        /* PC版マイ環境レポート＆ダッシュボード */
+        @media (min-width: 900px) {
+            .container { max-width: 1050px; }
+            .pc-layout-grid { display: grid; grid-template-columns: 1fr 1.15fr; gap: 25px; align-items: start; }
+            .right-col .desktop-feedback { display: block; }
+        }
+        .report-section {
+            background: white; border-radius: 12px; padding: 22px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.04); margin-bottom: 25px; text-align: left;
+        }
+        .report-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-top: 15px; }
+        .report-card {
+            background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 14px;
+        }
+        .report-card span { font-size: 11px; color: #64748b; display: block; margin-bottom: 4px; }
+        .report-card strong { font-size: 20px; color: #1e293b; }
+        .desktop-feedback { display: none; }
+        .feedback-panel { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; margin-bottom: 20px; box-shadow: 0 4px 15px rgba(0,0,0,.04); text-align: left; }
+        .feedback-panel h2 { margin: 0 0 14px; color: #2c3e50; font-size: 17px; }
+        .feedback-lead { margin: -4px 0 16px; color: #64748b; font-size: 13px; line-height: 1.6; }
+        .month-highlight { padding: 20px; border-radius: 10px; background: linear-gradient(135deg, #e8f8f5, #f3fbf7); border: 1px solid #ccebdd; }
+        .month-highlight-label { color: #257a52; font-size: 13px; font-weight: 700; }
+        .month-highlight-value { display: block; margin-top: 5px; color: #17633f; font-size: 32px; font-weight: 800; }
+        .month-highlight-unit { color: #566573; font-size: 14px; font-weight: 600; }
+        .month-highlight-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 16px; }
+        .month-highlight-stat { padding: 12px; background: rgba(255,255,255,.8); border-radius: 8px; }
+        .month-highlight-stat span { display: block; color: #64748b; font-size: 11px; }
+        .month-highlight-stat strong { display: block; margin-top: 4px; color: #1e293b; font-size: 18px; }
+        .comparison-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+        .comparison-card { padding: 12px; background: #f8fafc; border-radius: 8px; }
+        .comparison-card span, .comparison-card small { display: block; color: #64748b; font-size: 11px; }
+        .comparison-card strong { display: block; margin: 5px 0; color: #1e293b; font-size: 18px; }
+        .growth-up { color: #16834a !important; }
+        .growth-down { color: #64748b !important; }
+        .trend-chart { display: grid; gap: 10px; }
+        .trend-row { display: grid; grid-template-columns: 72px 1fr 44px; align-items: center; gap: 10px; color: #64748b; font-size: 11px; }
+        .trend-track { height: 10px; overflow: hidden; border-radius: 8px; background: #edf2ef; }
+        .trend-bar { height: 100%; border-radius: inherit; background: linear-gradient(90deg, #65c98a, #258653); }
+        .category-list { display: flex; flex-wrap: wrap; gap: 8px; }
+        .category-chip { padding: 8px 11px; border-radius: 20px; background: #eef7f1; color: #17633f; font-size: 12px; font-weight: 700; }
+        .feedback-event { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid #edf2ef; }
+        .feedback-event:last-child { border-bottom: 0; }
+        .feedback-event-name { color: #2c3e50; font-size: 13px; font-weight: 700; }
+        .feedback-event-meta { display: block; margin-top: 4px; color: #64748b; font-size: 11px; }
+        .feedback-event-link { flex: 0 0 auto; padding: 8px 12px; border-radius: 18px; background: #2ecc71; color: #fff; font-size: 11px; font-weight: 700; text-decoration: none; }
+        .schedule-month { padding: 12px 0; border-bottom: 1px solid #edf2ef; }
+        .schedule-month:last-child { border-bottom: 0; }
+        .schedule-month h3 { margin: 0 0 7px; color: #257a52; font-size: 13px; }
+        .schedule-event { display: flex; justify-content: space-between; gap: 10px; padding: 5px 0; color: #475569; font-size: 12px; }
+        .feedback-empty { margin: 0; color: #64748b; font-size: 12px; line-height: 1.6; }
+        .trend-table { width: 100%; font-size: 12px; border-collapse: collapse; margin-top: 10px; }
+        .trend-table th, .trend-table td { padding: 6px 8px; text-align: right; border-bottom: 1px solid #f1f5f9; }
+        .trend-table th:first-child, .trend-table td:first-child { text-align: left; }
+        .trend-table th { color: #64748b; font-weight: normal; }
+
+        @media (max-width: 480px) {
+            .hero-banner { padding: 28px 16px; }
+            .hero-banner h1 { font-size: 28px; }
+            .container { margin: 18px auto; padding: 0 12px; }
+            .user-card { padding: 20px 16px; }
+            .user-card h2 { font-size: 18px; overflow-wrap: anywhere; }
+            .points-box { gap: 8px; }
+            .point-card { padding: 12px 10px; min-width: 0; }
+            .point-card strong { font-size: 18px; }
+            .btn-main { width: 100%; padding: 14px 18px; }
+            .pro-section { padding: 16px; }
+            .pro-section > div { flex-wrap: wrap; }
+
+            .list-wrapper { padding: 6px; }
+            .list-item { gap: 10px; padding: 12px 8px; }
+            .list-item > div:first-child { min-width: 0; overflow-wrap: anywhere; }
+            .item-btn { padding: 8px 12px; text-align: center; }
+            .exchange-btn { width: 100%; min-height: 56px; padding: 16px 18px; font-size: 17px; }
+            .event-list .list-item { flex-direction: column; align-items: stretch; }
+            .event-list .list-item > .item-btn { width: 100%; }
+            .reservation-actions { display: grid; grid-template-columns: 1fr 1fr; align-items: center; gap: 10px; }
+            .reservation-actions .item-btn { min-height: 44px; }
+            .event-list-links { flex-direction: column; }
+            .event-list-link { width: 100%; }
+            .report-section { padding: 16px; }
+            .report-grid { gap: 8px; }
+            .report-card { padding: 12px 10px; }
+            .report-card strong { font-size: 18px; }
+            .trend-table th, .trend-table td { padding: 6px 4px; }
+        }
+    </style>
+</head>
+<body>
+    {% include "_user_navigation.html" %}
+
+    <!-- 🌿 タイトル表示エリア -->
+    <div class="hero-banner">
+        <h1><a href="{{ url_for('home') }}" style="color:white; text-decoration:none;">CleanStep</a></h1>
+        <p>持続可能な街並みを、私たちのステップで。</p>
+    </div>
+
+    <div class="container">
+        {% for category, message in get_flashed_messages(with_categories=true) %}
+            <div class="flash-message flash-{{ category }}" role="status">
+                {{ message }}
+                <button class="flash-close" type="button" aria-label="お知らせを閉じる">×</button>
+            </div>
+        {% endfor %}
+
+        <!-- 👤 ログインユーザー情報 -->
+        <div class="user-card">
+            <h2>こんにちは、<strong>{{ user['name'] }}</strong> さん</h2>
+            
+            <div class="points-box">
+                <div class="point-card">
+                    <span>🪙 保有ポイント</span>
+                    <strong>{{ user['total_points'] }} pt</strong>
+                </div>
+                <div class="point-card">
+                    <span>本日の獲得</span>
+                    <strong>{{ user['today_points'] }} pt</strong>
+                </div>
+            </div>
+        </div>
+
+        <div class="pc-layout-grid">
+            <div class="left-col">
+                <!-- 📸 メインの現場アクションボタン -->
+                <div class="action-area" style="margin-top: 0;">
+                    <a href="{{ url_for('trash_bin') }}" class="btn-main">📸 エコごみ箱を開く（AI判定）</a>
+                    <p style="font-size:12px; color:#7f8c8d; margin-top:12px; line-height:1.4; padding:0 20px;">
+                        ※ 公平にポイントを付与するため、自己申告の個数ではなく、<br>
+                        <strong>AIが写真から認識したごみの個数</strong>をもとにポイントが計算されます。
+                    </p>
+                    <a href="{{ url_for('exchange_page') }}" class="item-btn exchange-btn">地元の特典を確認・交換</a>
+                </div>
+
+                <div class="pro-section">
+                    <h3>地域の清掃イベントを主催する</h3>
+                    {% if organizer_status == 'approved' %}
+                        <p>主催者として承認されています。あなたの団体の清掃イベントを募集できます。</p>
+                        <a href="{{ url_for('organizer_dashboard') }}" class="item-btn">団体向けメニュー</a>
+                    {% elif organizer_status == 'pending' %}
+                        <p>主催者申請を受け付けています。確認が完了するまでお待ちください。</p>
+                        <a href="{{ url_for('organizer_apply') }}" class="item-btn">申請状況を確認</a>
+                    {% else %}
+                        <p>町内会・自治会・地域団体の方は、清掃イベント主催者の申請ができます。</p>
+                        <a href="{{ url_for('organizer_apply') }}" class="item-btn">主催者を申請</a>
+                    {% endif %}
+                </div>
+
+                <div class="event-list-section" id="my-reserved-events">
+                    <div class="section-title">📌 予約したイベント</div>
+                    <div class="list-wrapper event-list">
+                        {% if my_reserved_events %}
+                            {% for event in my_reserved_events %}
+                                <div class="list-item">
+                                    <div class="event-card-info" style="text-align: left;">
+                                        <strong class="event-card-title">{{ event['name'] }}</strong>
+                                        <span class="event-card-meta">📍 {{ event['location'] }} | 🕒 {{ event['datetime'] }}</span>
+                                        {{ event_map_link(event) }}
+                                        <span class="event-bonus">参加ボーナス +{{ event['bonus_points'] }} pt</span>
+                                    </div>
+                                    <div class="reservation-actions">
+                                        <span class="item-reserved">予約済み</span>
+                                        {% if event['datetime']|event_started %}
+                                            <a href="{{ url_for('event_live', event_id=event['id']) }}" class="item-btn">計測開始</a>
+                                        {% else %}
+                                            <span class="item-reserved">開催前</span>
+                                        {% endif %}
+                                        <a href="{{ url_for('event_reserve', event_id=event['id']) }}" class="item-btn">予約内容</a>
+                                    </div>
+                                </div>
+                            {% endfor %}
+                        {% else %}
+                            <p class="event-empty">予約したイベントはまだありません。下の一覧からイベントを予約できます。</p>
+                        {% endif %}
+                    </div>
+                    <a class="item-btn event-list-link" href="{{ url_for('my_reservations') }}">予約したイベント一覧を開く（全{{ reserved_event_count }}件）</a>
+                </div>
+
+                <div class="event-list-section" id="upcoming-events">
+                    <div class="section-title">イベント一覧</div>
+                <div class="list-wrapper event-list">
+                    {% for event in events %}
+                        <div class="list-item">
+                            <div class="event-card-info" style="text-align: left;">
+                                <strong class="event-card-title">{{ event['name'] }}</strong>
+                                <span class="event-card-meta">📍 {{ event['location'] }} | 🕒 {{ event['datetime'] }}</span>
+                                {{ event_map_link(event) }}
+                                <span class="event-bonus">参加ボーナス +{{ event['bonus_points'] }} pt</span>
+                            </div>
+                            {% if joined_events and event['id'] in joined_events %}
+                                <div class="item-joined">✓ 参加済み</div>
+                            {% elif reserved_events and event['id'] in reserved_events %}
+                                <div class="reservation-actions">
+                                    <span class="item-reserved">予約済み</span>
+                                    {% if event['datetime']|event_started %}
+                                        <a href="{{ url_for('event_live', event_id=event['id']) }}" class="item-btn">計測開始</a>
+                                    {% else %}
+                                        <a href="{{ url_for('event_reserve', event_id=event['id']) }}" class="item-btn">開催前・予約内容</a>
+                                    {% endif %}
+                                </div>
+                            {% else %}
+                                <a href="{{ url_for('event_reserve', event_id=event['id']) }}" class="item-btn">詳細・予約</a>
+                            {% endif %}
+                        </div>
+                    {% endfor %}
+                    {% if not events %}
+                        <p class="event-empty">1年以内に開催予定のイベントはありません。</p>
+                    {% endif %}
+                </div>
+                <a class="item-btn event-list-link" href="{{ url_for('all_events') }}">イベント一覧を開く（全{{ event_count }}件）</a>
+                </div>
+            </div>
+
+            <div class="right-col">
+                <section class="desktop-feedback" aria-label="活動フィードバック">
+                    <div class="feedback-panel month-highlight">
+                        <span class="month-highlight-label">{{ my_report.current_month.label }}の活動</span>
+                        <strong class="month-highlight-value">
+                            {{ my_report.current_month.trash }}<span class="month-highlight-unit"> 個 回収</span>
+                        </strong>
+                        <div class="month-highlight-grid">
+                            <div class="month-highlight-stat">
+                                <span>イベント参加</span>
+                                <strong>{{ my_report.current_month.events }} 回</strong>
+                            </div>
+                            <div class="month-highlight-stat">
+                                <span>獲得ポイント</span>
+                                <strong>{{ my_report.current_month.points }} pt</strong>
+                            </div>
+                            <div class="month-highlight-stat">
+                                <span>前月の回収数</span>
+                                <strong>{{ my_report.previous_month.trash }} 個</strong>
+                            </div>
+                        </div>
+                    </div>
+
+                    <section class="feedback-panel">
+                        <h2>📈 {{ my_report.previous_month.label }}と比べて</h2>
+                        <p class="feedback-lead">あなた自身の前月の活動実績との比較です。</p>
+                        <div class="comparison-grid">
+                            {% for key, label, unit in [('trash', 'ごみ回収', '個'), ('events', 'イベント参加', '回'), ('points', '獲得ポイント', 'pt')] %}
+                                {% set change = my_report.current_month[key] - my_report.previous_month[key] %}
+                                <div class="comparison-card">
+                                    <span>{{ label }}</span>
+                                    <strong>{{ my_report.current_month[key] }} {{ unit }}</strong>
+                                    <small class="{{ 'growth-up' if change > 0 else 'growth-down' }}">
+                                        {% if change > 0 %}前月より {{ change }} {{ unit }} 増えました{% elif change < 0 %}前月より {{ -change }} {{ unit }} 少なめ{% else %}前月と同じ{% endif %}
+                                    </small>
+                                </div>
+                            {% endfor %}
+                        </div>
+                    </section>
+
+                    <section class="feedback-panel">
+                        <h2>📅 最近6か月のイベント参加</h2>
+                        {% set max_event_count = my_report.activity_trends|map(attribute='events')|max %}
+                        <div class="trend-chart">
+                            {% for month in my_report.activity_trends %}
+                                <div class="trend-row">
+                                    <span>{{ month.month }}</span>
+                                    <div class="trend-track" role="img" aria-label="{{ month.events }} 回参加">
+                                        <div class="trend-bar" style="width: {{ (100 * month.events / max_event_count)|round|int if max_event_count else 0 }}%;"></div>
+                                    </div>
+                                    <strong>{{ month.events }} 回</strong>
+                                </div>
+                            {% endfor %}
+                        </div>
+                    </section>
+
+                    <section class="feedback-panel">
+                        <h2>🌿 よく参加しているイベントの種類</h2>
+                        {% if my_report.preferred_categories %}
+                            <div class="category-list">
+                                {% for category in my_report.preferred_categories[:3] %}
+                                    <span class="category-chip">{{ category.name }} · {{ category.count }}回</span>
+                                {% endfor %}
+                            </div>
+                        {% else %}
+                            <p class="feedback-empty">イベントに参加すると、あなたがよく参加する種類がここに表示されます。</p>
+                        {% endif %}
+                    </section>
+
+                    <section class="feedback-panel">
+                        <h2>✨ あなたへのおすすめイベント</h2>
+                        <p class="feedback-lead">
+                            {% if my_report.preferred_categories %}これまで参加したイベントの種類と、今後の開催予定から選びました。{% else %}まずは開催日が近いイベントからご紹介します。{% endif %}
+                        </p>
+                        {% for event in recommended_events %}
+                            <div class="feedback-event">
+                                <div>
+                                    <span class="feedback-event-name">{{ event.name }}</span>
+                                    <span class="feedback-event-meta">{{ event.category }} · {{ event.datetime|replace('-', '/') }} · {{ event.location }}</span>
+                                </div>
+                                <a class="feedback-event-link" href="{{ url_for('event_reserve', event_id=event.id) }}">詳細を見る</a>
+                            </div>
+                        {% else %}
+                            <p class="feedback-empty">現在おすすめできるイベントはありません。新しいイベントの開催をお待ちください。</p>
+                        {% endfor %}
+                    </section>
+
+                    <section class="feedback-panel">
+                        <h2>🗓 おすすめの活動スケジュール</h2>
+                        <p class="feedback-lead">開催が確定しているイベントから、今後3か月の候補をまとめました。</p>
+                        {% for month in activity_schedule %}
+                            <div class="schedule-month">
+                                <h3>{{ month.label }}</h3>
+                                {% for event in month.events %}
+                                    <div class="schedule-event">
+                                        <span>{{ event.datetime|replace('-', '/') }} · {{ event.name }}</span>
+                                        <a href="{{ url_for('event_reserve', event_id=event.id) }}">詳細</a>
+                                    </div>
+                                {% else %}
+                                    <p class="feedback-empty">この月に参加できるイベントはまだありません。</p>
+                                {% endfor %}
+                            </div>
+                        {% endfor %}
+                    </section>
+                </section>
+
+                <div class="report-section">
+                    <div class="section-title" style="margin-top:0;">🌱 環境美化レポート</div>
+                    <div class="report-grid">
+                        <div class="report-card">
+                            <span>累計回収ごみ数</span>
+                            <strong>{{ my_report.my_total_trash }} 個</strong>
+                        </div>
+                        <div class="report-card">
+                            <span>イベント参加数</span>
+                            <strong>{{ my_report.my_event_count }} 回</strong>
+                        </div>
+                    </div>
+                    {% if my_report.monthly_trends %}
+                        <div style="margin-top: 15px;">
+                            <span style="font-size: 12px; color: #475569; font-weight: bold;">📅 最近の月別活動記録</span>
+                            <table class="trend-table">
+                                <thead>
+                                    <tr><th>年月</th><th>回収数</th><th>参加数</th><th>獲得pt</th></tr>
+                                </thead>
+                                <tbody>
+                                    {% for m in my_report.monthly_trends %}
+                                        <tr>
+                                            <td>{{ m.month }}</td><td>{{ m.trash }} 個</td>
+                                            <td>{{ m.events }} 回</td><td>+{{ m.points }} pt</td>
+                                        </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    {% else %}
+                        <p style="font-size: 13px; color: #64748b; margin: 15px 0 0;">
+                            月別の活動記録はまだありません。
+                        </p>
+                    {% endif %}
+                </div>
+
+                <div class="section-title">最近の活動履歴</div>
+                <div class="list-wrapper">
+                    {% if not history %}
+                        <p style="color: #95a5a6; padding: 15px; margin: 0; text-align: left; font-size: 14px;">まだ活動履歴がありません。ゴミを拾って街を綺麗にしましょう！</p>
+                    {% else %}
+                        {% for h in history %}
+                            <div class="list-item">
+                                <div style="text-align: left;">
+                                    <strong style="color: #2c3e50; font-size: 14px;">{{ h['title'] }}</strong><br>
+                                    <span style="color: #95a5a6; font-size: 11px;">{{ h['date']|jst_datetime }}</span>
+                                </div>
+                                <span style="color: #2ecc71; font-weight: bold; font-size: 16px;">+{{ h['points_earned'] }} pt</span>
+                            </div>
+                        {% endfor %}
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+<script>
+    document.querySelectorAll('.flash-close').forEach(button => {
+        button.addEventListener('click', () => button.parentElement.remove());
+    });
+</script>
+<script>
+if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("/static/sw.js")
+        .then(() => console.log("SW registered"));
+}
+</script>
+</body>
+</html>

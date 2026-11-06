@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CleanStep - AI判定ログ</title>
+
+    <style>
+        :root {
+            --primary-green: #2b8a3e;
+            --bg-gray: #f8f9fa;
+            --border-gray: #dee2e6;
+            --text-dark: #212529;
+            --text-muted: #6c757d;
+            --danger-red: #c0392b;
+            --info-blue: #2980b9;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: var(--bg-gray);
+            color: var(--text-dark);
+            margin: 0;
+            padding: 0;
+        }
+
+        nav {
+            background: #ffffff;
+            border-bottom: 1px solid var(--border-gray);
+            padding: 14px 20px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+        }
+
+        nav a {
+            text-decoration: none;
+            color: var(--text-muted);
+            font-weight: 700;
+        }
+
+        .container {
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 30px 20px;
+        }
+
+        .hover-card {
+            background: #ffffff;
+            border: 1px solid var(--border-gray);
+            border-radius: 8px;
+            padding: 19px;
+            margin-bottom: 25px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.04);
+            transition: transform 0.2s ease-out, box-shadow 0.2s ease-out;
+        }
+        .hover-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 6px 12px rgba(0,0,0,0.08);
+        }
+
+        .card-title {
+            font-size: 1.2rem;
+            font-weight: 800;
+            margin: 0;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }
+        th, td {
+            padding: 12px;
+            border-bottom: 1px solid var(--border-gray);
+            text-align: left;
+        }
+        th {
+            background-color: #ffffff;
+            font-weight: 700;
+        }
+        td {
+            background-color: #ffffff;
+            font-size: 0.9rem;
+        }
+
+        .thumb {
+            width: 70px;
+            height: 70px;
+            object-fit: cover;
+            border-radius: 6px;
+            border: 1px solid var(--border-gray);
+        }
+
+        .flag {
+            color: var(--danger-red);
+            font-weight: 700;
+        }
+
+        .btn-detail {
+            background-color: var(--info-blue);
+            color: #fff;
+            padding: 6px 12px;
+            border-radius: 6px;
+            border: none;
+            font-weight: 700;
+            cursor: pointer;
+        }
+        .btn-detail:hover {
+            background-color: #1f6a8a;
+        }
+    </style>
+</head>
+
+<body>
+
+    <nav>
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+            <a href="{{ url_for('admin_dashboard') }}">← 管理メニューに戻る</a>
+            <span style="font-weight:800; font-size:1.2rem;">🤖 AI判定ログ</span>
+            <a href="{{ url_for('logout') }}" style="color:var(--primary-green); font-weight:700;">ログアウト</a>
+        </div>
+    </nav>
+
+    <div class="container">
+
+        <div class="hover-card" style="border-left:5px solid var(--primary-green);">
+            <h2 class="card-title">📸 判定一覧</h2>
+            <p class="muted">AIが判定したごみ拾い記録の一覧です。不正疑いは赤く表示されます。</p>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>画像</th>
+                        <th>判定結果</th>
+                        <th>AI検出数</th>
+                        <th>信頼度</th>
+                        <th>ユーザー</th>
+                        <th>メールアドレス</th>
+                        <th>日時</th>
+                        <th>不正</th>
+                        <th>詳細</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {% for log in logs %}
+                    <tr>
+                        <td>{% if log.image_url %}<img src="{{ log.image_url }}" class="thumb" alt="判定画像">{% else %}-{% endif %}</td>
+                        <td>{{ log.result_status_label }}</td>
+                        <td>{% if log.detected_count is not none %}{{ log.detected_count }}{% else %}—{% endif %}</td>
+                        <td>{% if log.confidence_percent is not none %}{{ log.confidence_percent }}%{% else %}—{% endif %}</td>
+                        <td>{{ log.user_name or 'ユーザー情報なし' }}</td>
+                        <td>{{ log.email or '-' }}</td>
+                        <td>{{ log.timestamp }}</td>
+                        <td>
+                            {% if log.flagged %}
+                                <span class="flag">⚠ 不正疑い</span>
+                            {% else %}
+                                -
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if log.id %}
+                            <a href="{{ url_for('admin_ai_log_detail', log_id=log.id) }}" class="btn-detail" style="display:inline-block; text-decoration:none;">詳細</a>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+
+        </div>
+
+    </div>
+
+</body>
+</html>

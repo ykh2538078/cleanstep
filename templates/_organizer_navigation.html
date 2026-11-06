@@ -1,0 +1,49 @@
+<style>
+    .organizer-app-bar { position: fixed; inset: 0 0 auto; z-index: 1000; display: flex; justify-content: space-between; align-items: flex-start; padding: 10px 12px; pointer-events: none; }
+    .organizer-app-bar a, .organizer-menu-toggle { pointer-events: auto; }
+    .organizer-menu-toggle { width: 42px; height: 42px; border: 1px solid rgba(44,62,80,.2); border-radius: 8px; background: rgba(255,255,255,.92); color: #2c3e50; font-size: 23px; cursor: pointer; }
+    .organizer-app-logout { display: inline-flex; min-height: 42px; box-sizing: border-box; align-items: center; padding: 0 12px; border-radius: 8px; background: rgba(255,255,255,.92); color: #a32626; text-decoration: none; font-size: 13px; font-weight: 700; }
+    .organizer-menu-panel { position: fixed; inset: 0 auto 0 0; z-index: 1002; width: min(320px, 85vw); padding: 20px; background: #fff; box-shadow: 4px 0 18px rgba(0,0,0,.18); transform: translateX(-105%); transition: transform .2s ease; }
+    .organizer-menu-panel[aria-hidden="false"] { transform: translateX(0); }
+    .organizer-menu-panel nav { display: grid; gap: 8px; margin-top: 20px; }
+    .organizer-menu-panel nav a { padding: 12px; border-radius: 8px; background: #f3f8f5; color: #17633f; text-decoration: none; font-weight: 700; }
+    .organizer-menu-backdrop { position: fixed; inset: 0; z-index: 1001; border: 0; background: rgba(15,23,42,.35); }
+    .organizer-menu-backdrop[hidden] { display: none; }
+    @media (prefers-reduced-motion: reduce) { .organizer-menu-panel { transition: none; } }
+</style>
+<div class="organizer-app-bar">
+    <button class="organizer-menu-toggle" type="button" aria-label="団体メニューを開く" aria-expanded="false" aria-controls="organizer-menu-panel">☰</button>
+    <a class="organizer-app-logout" href="{{ url_for('logout') }}">ログアウト</a>
+</div>
+<button class="organizer-menu-backdrop" type="button" aria-label="団体メニューを閉じる" hidden></button>
+<aside class="organizer-menu-panel" id="organizer-menu-panel" aria-hidden="true" aria-label="団体メニュー">
+    <strong>団体メニュー</strong>
+    <nav>
+        <a href="{{ url_for('organizer_dashboard') }}">団体ダッシュボード</a>
+        <a href="{{ url_for('organizer_events') }}">イベント管理</a>
+        <a href="{{ url_for('organizer_event_new') }}">イベントを申請</a>
+        <a href="{{ url_for('organizer_event_edit_list') }}">イベントを編集</a>
+    </nav>
+</aside>
+<script>
+    (() => {
+        const toggle = document.querySelector('.organizer-menu-toggle');
+        const panel = document.getElementById('organizer-menu-panel');
+        const backdrop = document.querySelector('.organizer-menu-backdrop');
+        const close = () => {
+            panel.setAttribute('aria-hidden', 'true');
+            toggle.setAttribute('aria-expanded', 'false');
+            backdrop.hidden = true;
+        };
+        toggle.addEventListener('click', () => {
+            const isOpen = panel.getAttribute('aria-hidden') === 'false';
+            panel.setAttribute('aria-hidden', String(isOpen));
+            toggle.setAttribute('aria-expanded', String(!isOpen));
+            backdrop.hidden = isOpen;
+        });
+        backdrop.addEventListener('click', close);
+        document.addEventListener('keydown', event => {
+            if (event.key === 'Escape') close();
+        });
+    })();
+</script>

@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>活動実績レポート | CleanStep</title>
+    <style>
+        body { margin: 0; padding: 24px 16px; background: #f4f7f6; color: #263238; font-family: "Yu Gothic", Meiryo, sans-serif; }
+        main { max-width: 1200px; margin: 24px auto; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 14px; margin: 20px 0; }
+        .card, section { padding: 18px; background: #fff; border: 1px solid #dce5e1; border-radius: 8px; }
+        .number { font-size: 1.6rem; font-weight: 700; color: #257a52; }
+        .label, .note { color: #596a63; }
+        .coverage { margin-top: 5px; font-size: .85rem; color: #596a63; }
+        section { overflow-x: auto; margin: 18px 0; }
+        h2 { margin-top: 0; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 11px; border-bottom: 1px solid #dce5e1; text-align: right; white-space: nowrap; }
+        th:first-child, td:first-child { text-align: left; }
+        th { background: #edf5f0; }
+        .data-note { padding: 14px 16px; border-left: 4px solid #8b9a92; background: #eef2ef; color: #435149; line-height: 1.55; }
+        @media (max-width: 640px) {
+            body { padding: 16px 10px; }
+            main { margin: 12px auto; }
+            .card, section { padding: 14px; }
+            th, td { padding: 9px 8px; }
+        }
+    </style>
+</head>
+<body>
+    {% include "_admin_navigation.html" %}
+<main>
+    <p><a href="{{ url_for('admin_dashboard') }}">← 管理ダッシュボード</a></p>
+    <h1>活動実績レポート</h1>
+    <p class="note">直近12か月（今月を含む）の活動履歴を集計しています。件数はデータベースに記録された内容であり、ごみの重量・体積や環境効果を示すものではありません。</p>
+    <div class="grid">
+        <div class="card"><div class="number">{{ summary.active_users or 0 }}</div><div class="label">活動ユーザー数（実人数）</div></div>
+        <div class="card"><div class="number">{{ summary.activity_count or 0 }}</div><div class="label">活動記録数</div></div>
+        <div class="card"><div class="number">{{ summary.event_count or 0 }}</div><div class="label">イベント参加記録（延べ）</div></div>
+        <div class="card"><div class="number">{{ summary.trash_record_count or 0 }}</div><div class="label">ごみ捨て記録数</div></div>
+        <div class="card">
+            <div class="number">{% if summary.ai_record_count %}{{ summary.ai_detected_count }}{% elif summary.trash_record_count %}未判定{% else %}対象記録なし{% endif %}</div>
+            <div class="label">画像ログ上の検出数合計</div>
+            <div class="coverage">判定ログ {{ summary.ai_record_count }}件</div>
+        </div>
+        <div class="card"><div class="number">{{ summary.ai_unclassified_count or 0 }}</div><div class="label">AI検出数の未記録</div></div>
+        <div class="card">
+            <div class="number">{% if summary.user_declared_record_count %}{{ summary.user_declared_count }}{% elif summary.trash_record_count %}申告なし（0件または未入力）{% else %}対象記録なし{% endif %}</div>
+            <div class="label">ユーザー申告数（記録あり分）</div>
+            <div class="coverage">記録あり {{ summary.user_declared_record_count }}件</div>
+        </div>
+        <div class="card"><div class="number">{{ summary.user_declared_unclassified_count or 0 }}</div>        <div class="label">申告なし（0件または未入力）</div></div>
+        <div class="card"><div class="number">{{ summary.points_earned or 0 }}</div><div class="label">獲得ポイント</div></div>
+    </div>
+    <p class="data-note">
+        AI検出数とユーザー申告数は別々に集計しています。「画像ログ上の検出数合計」は活動に紐付く成功ログごとの検出数を足した値です。同じ対象が複数画像に写る場合は重複する可能性があるため、実回収数やユニーク個数ではありません。判定ログが紐付かない過去の活動記録は、AIの検出数を確認できません。袋の大きさ・充填率・重量は記録していないため、個数を回収量に換算していません。
+    </p>
+    <section>
+        <h2>データ確認状況</h2>
+        <p class="note">直近12か月の記録について、値の出所ごとに確認状態を集計しています。AIは画像判定ログ単位、申告・GPSは活動内の項目単位です。GPSの確認は記録値・計測方法の確認であり、実際の移動を保証するものではありません。</p>
+        <table>
+            <thead><tr><th>確認対象</th><th>確認済み</th><th>未確認</th><th>要修正</th><th>判定失敗</th><th>未記録</th></tr></thead>
+            <tbody>
+            {% for target_type, row in verification_summary.items() %}
+                <tr>
+                    <td>{{ row.label }}</td>
+                    <td>{{ row.confirmed }}</td>
+                    <td>{{ row.unreviewed }}</td>
+                    <td>{{ row.correction_required }}</td>
+                    <td>{{ row.failed }}</td>
+                    <td>{{ row.unrecorded }}</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        <p class="note">申告数が0以下または未入力の記録 {{ unclassified_declaration_count }} 件は、0件の申告と未入力を区別できないため確認対象の集計から除外しています。</p>
+        <p><a href="{{ url_for('admin_activity_verifications') }}">活動データの確認状態を管理する</a></p>
+    </section>
+    <section>
+        <h2>月別実績</h2>
+        <table>
+            <thead><tr><th>年月</th><th>活動記録</th><th>活動ユーザー（実人数）</th><th>イベント参加記録</th><th>ごみ捨て記録</th><th>画像ログ上の検出数合計／ログ数</th><th>AI未記録</th><th>ユーザー申告数（記録あり分／件数）</th><th>申告なし（0件または未入力）</th><th>獲得ポイント</th></tr></thead>
+            <tbody>
+            {% for row in monthly %}
+                <tr>
+                    <td>{{ row.month }}</td>
+                    <td>{{ row.activity_count }}</td>
+                    <td>{{ row.active_users }}</td>
+                    <td>{{ row.event_count }}</td>
+                    <td>{{ row.trash_record_count }}</td>
+                    <td>{% if row.ai_record_count %}{{ row.ai_detected_count }} / {{ row.ai_record_count }}件{% elif row.trash_record_count %}未判定{% else %}対象記録なし{% endif %}</td>
+                    <td>{{ row.ai_unclassified_count }}</td>
+                    <td>{% if row.user_declared_record_count %}{{ row.user_declared_count }} / {{ row.user_declared_record_count }}件{% elif row.trash_record_count %}申告なし（0件または未入力）{% else %}対象記録なし{% endif %}</td>
+                    <td>{{ row.user_declared_unclassified_count }}</td>
+                    <td>{{ row.points_earned }}</td>
+                </tr>
+            {% else %}
+                <tr><td colspan="10">対象期間に活動記録はありません。</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </section>
+    <section>
+        <h2>AI画像判定ログ（画像単位）</h2>
+        <p class="note">
+            画像ログ上の検出数合計は判定ログごとの検出数を足した値です。同じ対象が複数画像に写ると重複して数える可能性があるため、実回収数やユニーク個数とはみなせません。
+            検出0件の判定も成功した判定結果として記録し、判定失敗とは分けて表示します。
+        </p>
+        <p>
+            判定ログ {{ ai_result_summary.result_count or 0 }} 件 /
+            検出あり {{ ai_result_summary.detected_count or 0 }} 件 /
+            検出0件 {{ ai_result_summary.no_detection_count or 0 }} 件 /
+            判定失敗 {{ ai_result_summary.failed_count or 0 }} 件 /
+            画像ログ上の検出数合計 {{ ai_result_summary.image_detection_total or 0 }}
+        </p>
+        <table>
+            <thead><tr><th>年月</th><th>判定ログ</th><th>検出あり</th><th>検出0件</th><th>判定失敗</th><th>ログ上の検出数合計</th></tr></thead>
+            <tbody>
+            {% for row in ai_result_monthly %}
+                <tr>
+                    <td>{{ row.month }}</td>
+                    <td>{{ row.result_count }}</td>
+                    <td>{{ row.detected_count }}</td>
+                    <td>{{ row.no_detection_count }}</td>
+                    <td>{{ row.failed_count }}</td>
+                    <td>{{ row.image_detection_total }}</td>
+                </tr>
+            {% else %}
+                <tr><td colspan="6">対象期間にAI判定ログはありません。</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </section>
+    <section>
+        <h2>イベント別参加実績</h2>
+        <table>
+            <thead><tr><th>イベント</th><th>開催場所</th><th>参加人数（実人数）</th><th>参加記録数</th><th>付与ポイント</th></tr></thead>
+            <tbody>
+            {% for row in event_activity %}
+                <tr>
+                    <td>{{ row.event_name }}</td>
+                    <td>{{ row.location }}</td>
+                    <td>{{ row.participant_count }}</td>
+                    <td>{{ row.participation_record_count }}</td>
+                    <td>{{ row.points_earned }}</td>
+                </tr>
+            {% else %}
+                <tr><td colspan="5">対象期間にイベント参加記録はありません。</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </section>
+    <section>
+        <h2>場所別ごみ捨て記録</h2>
+        <table>
+            <thead><tr><th>記録された場所</th><th>利用者（実人数）</th><th>記録数</th><th>画像ログ上の検出数合計／ログ数</th><th>AI未記録</th><th>ユーザー申告数（記録あり分／件数）</th><th>申告なし（0件または未入力）</th></tr></thead>
+            <tbody>
+            {% for row in trash_locations %}
+                <tr>
+                    <td>{{ row.location }}</td>
+                    <td>{{ row.user_count }}</td>
+                    <td>{{ row.record_count }}</td>
+                    <td>{% if row.ai_record_count %}{{ row.ai_detected_count }} / {{ row.ai_record_count }}件{% else %}未判定{% endif %}</td>
+                    <td>{{ row.ai_unclassified_count }}</td>
+                    <td>{% if row.user_declared_record_count %}{{ row.user_declared_count }} / {{ row.user_declared_record_count }}件{% else %}申告なし（0件または未入力）{% endif %}</td>
+                    <td>{{ row.user_declared_unclassified_count }}</td>
+                </tr>
+            {% else %}
+                <tr><td colspan="7">対象期間にごみ捨て記録はありません。</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </section>
+</main>
+</body>
+</html>

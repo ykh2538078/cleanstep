@@ -1,0 +1,19 @@
+{% macro bin_user_map(bin) -%}
+    {% if bin %}
+        {% set lat = bin.lat|float %}
+        {% set lng = bin.lng|float %}
+        <div id="bin-map-display" style="margin-top:12px; overflow:hidden; border:1px solid #d5dbdb; border-radius:10px;">
+            <iframe
+                title="{{ bin.name }} の設置場所"
+                src="https://www.openstreetmap.org/export/embed.html?bbox={{ '%.6f'|format(lng - 0.004) }},{{ '%.6f'|format(lat - 0.0025) }},{{ '%.6f'|format(lng + 0.004) }},{{ '%.6f'|format(lat + 0.0025) }}&amp;layer=mapnik&amp;marker={{ '%.7f'|format(lat) }},{{ '%.7f'|format(lng) }}"
+                width="100%" height="240" style="display:block; border:0;"
+                loading="lazy">
+            </iframe>
+            <a id="bin-map-link" href="https://www.openstreetmap.org/?mlat={{ '%.7f'|format(lat) }}&amp;mlon={{ '%.7f'|format(lng) }}#map=17/{{ '%.7f'|format(lat) }}/{{ '%.7f'|format(lng) }}"
+               target="_blank" rel="noopener noreferrer"
+               style="display:block; padding:9px 12px; color:#257a52; font-size:13px; font-weight:700; text-decoration:none;">
+                OpenStreetMapで大きく表示 ↗
+            </a>
+        </div>
+    {% endif %}
+{%- endmacro %}

@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CleanStep - 管理者イベント登録</title>
+
+    <style>
+        :root {
+            --primary-green: #2b8a3e;
+            --primary-light: #f4fbf6;
+            --bg-gray: #f8f9fa;
+            --border-gray: #dee2e6;
+            --text-dark: #212529;
+            --text-muted: #6c757d;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: var(--bg-gray);
+            color: var(--text-dark);
+            margin: 0;
+            padding: 0;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 30px 20px;
+        }
+
+        /* 🌱 CleanStep カード */
+        .form-card {
+            background: #ffffff;
+            border: 1px solid var(--border-gray);
+            border-radius: 10px;
+            padding: 30px;
+            max-width: 750px;
+            width: 100%;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.04);
+            transition: transform 0.2s ease-out, box-shadow 0.2s ease-out;
+        }
+        .form-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 6px 12px rgba(0,0,0,0.08);
+        }
+
+        /* 🌱 タイトル */
+        .title-area {
+            border-bottom: 1px solid var(--border-gray);
+            padding-bottom: 15px;
+            margin-bottom: 25px;
+        }
+
+        .subtitle {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            font-weight: 700;
+        }
+
+        .title {
+            font-size: 1.4rem;
+            font-weight: 800;
+            margin-top: 6px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        /* 🌱 フォーム */
+        label {
+            font-weight: 700;
+            font-size: 0.9rem;
+            margin-bottom: 6px;
+            display: block;
+        }
+
+        .input-field {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid var(--border-gray);
+            border-radius: 6px;
+            background-color: #ffffff;
+            font-size: 1rem;
+            color: var(--text-dark);
+            box-sizing: border-box;
+            margin-bottom: 15px;
+        }
+
+        .input-hint {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            margin-top: -10px;
+            margin-bottom: 15px;
+        }
+
+        /* 🌱 ボタン */
+        .btn {
+            width: 100%;
+            padding: 14px;
+            border-radius: 6px;
+            font-size: 1rem;
+            font-weight: 700;
+            border: none;
+            cursor: pointer;
+        }
+
+        .btn-submit {
+            background-color: var(--primary-green);
+            color: #fff;
+        }
+        .btn-submit:hover {
+            background-color: #256f33;
+        }
+
+        .btn-back {
+            background-color: #e9ecef;
+            color: var(--text-muted);
+        }
+
+        /* レイアウト */
+        .row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+        }
+        .col-half {
+            flex: 1 1 calc(50% - 20px);
+        }
+        .col-full {
+            flex: 1 1 100%;
+        }
+    </style>
+</head>
+
+<body>
+    {% include "_admin_navigation.html" %}
+
+    <div class="form-card">
+
+        <!-- 🌱 タイトル -->
+        <div class="title-area">
+            <span class="subtitle">自治体・地域団体向け 管理用画面</span>
+            <h2 class="title">📢 新規ごみ拾いイベント登録</h2>
+        </div>
+
+        <!-- 🌱 フォーム本体 -->
+        {% if error_msg %}<p style="color:#a32626;">{{ error_msg }}</p>{% endif %}
+        <form action="{{ url_for('admin_event_add') }}" method="POST">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+            <div class="row">
+
+                <div class="col-half">
+                    <label>イベント名称：</label>
+                    <input type="text" name="name" placeholder="例：みなとみらい清掃イベント" required class="input-field">
+                </div>
+
+                <div class="col-half">
+                    <label>開催場所：</label>
+                    <input id="location" type="text" name="location" value="{{ event.location or '' }}" placeholder="例：横浜みなとみらい公園" required class="input-field">
+                </div>
+                {% include "_event_location_picker.html" %}
+
+                <div class="col-full">
+                    <label for="category">イベントのジャンル</label>
+                    <select id="category" name="category" class="input-field">
+                        <option value="auto" {% if event.category == 'auto' %}selected{% endif %}>自動判定（イベント名・場所から推測）</option>
+                        {% for category in event_categories %}
+                            <option value="{{ category }}" {% if event.category == category %}selected{% endif %}>{{ category }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="col-half">
+                    <label>開催日時：</label>
+                    <input type="datetime-local" name="datetime" value="{{ (event.datetime or '')|replace(' ', 'T') }}" required class="input-field">
+                </div>
+
+                <div class="col-half">
+                    <label>参加ボーナスポイント：</label>
+                    <input type="number" name="bonus_points" value="50" required class="input-field">
+                    <span class="input-hint">※イベント参加完了時に自動付与されるボーナス値です。</span>
+                </div>
+
+            </div>
+
+            <!-- 🌱 ボタン -->
+            <div class="row" style="margin-top: 10px; border-top: 1px solid var(--border-gray); padding-top: 20px;">
+                <div class="col-half">
+                    <a href="{{ url_for('admin_events') }}" class="btn btn-back" style="display:inline-block; text-decoration:none;">← メニューに戻る</a>
+                </div>
+                <div class="col-half">
+                    <button type="submit" class="btn btn-submit">✨ このイベントを公開する</button>
+                </div>
+            </div>
+
+        </form>
+
+    </div>
+
+</body>
+</html>

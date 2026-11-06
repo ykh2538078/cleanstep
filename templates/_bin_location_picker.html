@@ -1,0 +1,64 @@
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<div class="col-full">
+    <label for="bin-map">地図をクリックして設置位置にピンを置いてください</label>
+    <p class="input-hint">ピンはドラッグで調整できます。選択した緯度・経度を保存します。</p>
+    <div id="bin-map" style="height:360px; margin-bottom:16px; border:1px solid #dee2e6; border-radius:8px;"></div>
+</div>
+<div class="col-half">
+    <label for="bin-lat">緯度</label>
+    <input id="bin-lat" type="number" name="lat" min="-90" max="90" step="any"
+           value="{{ bin.lat }}" required class="input-field">
+</div>
+<div class="col-half">
+    <label for="bin-lng">経度</label>
+    <input id="bin-lng" type="number" name="lng" min="-180" max="180" step="any"
+           value="{{ bin.lng }}" required class="input-field">
+</div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+    (() => {
+        const latInput = document.getElementById('bin-lat');
+        const lngInput = document.getElementById('bin-lng');
+        const map = L.map('bin-map').setView([35.681236, 139.767125], 11);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '&copy; OpenStreetMap contributors'
+        }).addTo(map);
+
+        let marker = null;
+        const placeMarker = (lat, lng, zoom = 16) => {
+            if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+            if (marker) marker.setLatLng([lat, lng]);
+            else {
+                marker = L.marker([lat, lng], { draggable: true }).addTo(map);
+                marker.on('dragend', () => {
+                    const point = marker.getLatLng();
+                    latInput.value = point.lat.toFixed(7);
+                    lngInput.value = point.lng.toFixed(7);
+                });
+            }
+            latInput.value = lat.toFixed(7);
+            lngInput.value = lng.toFixed(7);
+            map.setView([lat, lng], zoom);
+        };
+
+        const currentLat = Number(latInput.value);
+        const currentLng = Number(lngInput.value);
+        if (latInput.value && lngInput.value) {
+            placeMarker(currentLat, currentLng, 16);
+        }
+
+        map.on('click', event => placeMarker(event.latlng.lat, event.latlng.lng));
+        const updateMarkerFromInputs = () => {
+            const lat = Number(latInput.value);
+            const lng = Number(lngInput.value);
+            if (latInput.value && lngInput.value &&
+                lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
+                placeMarker(lat, lng);
+            }
+        };
+        latInput.addEventListener('change', updateMarkerFromInputs);
+        lngInput.addEventListener('change', updateMarkerFromInputs);
+        setTimeout(() => map.invalidateSize(), 0);
+    })();
+</script>

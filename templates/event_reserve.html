@@ -1,0 +1,115 @@
+{% from "_event_location_map.html" import event_map_embed %}
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CleanStep - イベント参加予約</title>
+    <style>
+        body { font-family: 'Helvetica Neue', Arial, sans-serif; margin: 0; padding: 0; background-color: #f4f7f6; color: #333; text-align: center; }
+        .header { background: linear-gradient(135deg, #2ecc71, #27ae60); color: white; padding: 20px 64px; font-size: 20px; font-weight: bold; position: relative; }
+        
+        .container { max-width: 500px; margin: 20px auto; padding: 0 15px; box-sizing: border-box; }
+        /* 白背景・カードの浮き上がり（box-shadow）の再現 */
+        .card { background: white; padding: 30px; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.06); margin-bottom: 25px; text-align: left; }
+        
+        .title { font-size: 22px; font-weight: bold; color: #2c3e50; margin: 0 0 8px 0; }
+        .subtitle { font-size: 14px; color: #7f8c8d; margin: 0 0 25px 0; line-height: 1.4; }
+        
+        /* 詳細情報のグループ化 */
+        .info-group { margin-bottom: 20px; padding-bottom: 12px; border-bottom: 1px solid #f2f4f4; }
+        .info-group:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+        .info-label { font-size: 12px; color: #95a5a6; font-weight: bold; display: block; margin-bottom: 5px; letter-spacing: 1px; }
+        .info-value { font-size: 16px; color: #34495e; font-weight: 500; }
+        
+        .bonus-badge { display: inline-block; background-color: #e8f8f5; color: #2ecc71; font-weight: bold; padding: 5px 12px; border-radius: 6px; font-size: 14px; }
+        
+        /* 🚀 予約アクションボタン（緑: #2ecc71 基調） */
+        .btn-reserve { display: block; text-align: center; width: 100%; padding: 16px; background: linear-gradient(135deg, #2ecc71, #27ae60); color: white; border: none; border-radius: 30px; font-size: 16px; font-weight: bold; cursor: pointer; text-decoration: none; box-shadow: 0 6px 15px rgba(46,204,113,0.3); transition: transform 0.2s; box-sizing: border-box; }
+        .btn-reserve:hover { transform: translateY(-2px); }
+        
+        .alert-joined { background-color: #ebf5fb; border: 1px solid #d4e6f1; color: #2980b9; padding: 15px; border-radius: 12px; text-align: center; font-weight: bold; font-size: 14px; line-height: 1.5; }
+        
+        /* 🟠 戻るボタンのスタイル */
+        .btn-back { display: block; text-align: center; width: 100%; padding: 14px; background-color: white; color: #7f8c8d; border: 1px solid #d5dbdb; border-radius: 30px; font-size: 15px; font-weight: bold; text-decoration: none; box-sizing: border-box; transition: background 0.2s; }
+        .btn-back:hover { background-color: #f8f9fa; }
+        @media (max-width: 480px) {
+            .header { padding: 18px 60px; font-size: 18px; }
+            .container { margin: 14px auto; padding: 0 12px; }
+            .card { padding: 22px 18px; }
+            .title { font-size: 20px; }
+            .btn-reserve, .btn-back { min-height: 48px; }
+        }
+    </style>
+</head>
+<body>
+    {% include "_user_navigation.html" %}
+
+    <div class="header">
+        <a href="{{ url_for('home') }}" style="color:white; text-decoration:none;">📅 イベント参加予約</a>
+    </div>
+
+    <div class="container">
+        <div class="card">
+            {% for category, message in get_flashed_messages(with_categories=true) %}
+                <div class="alert-joined" role="status" style="margin-bottom: 18px;">{{ message }}</div>
+            {% endfor %}
+            <div class="title">イベント参加予約（清掃道具の事前確保）</div>
+            <p class="subtitle">当日の美化活動に使用するトング、軍手、分別用ゴミ袋のセットを事務局側で事前に確保いたします。</p>
+            
+            <div class="info-group">
+                <span class="info-label">📢 イベント名</span>
+                <span class="info-value">{{ event['name'] }}</span>
+            </div>
+            
+            <div class="info-group">
+                <span class="info-label">📍 集合・開催場所</span>
+                <span class="info-value">{{ event['location'] }}</span>
+                {{ event_map_embed(event) }}
+            </div>
+            
+            <div class="info-group">
+                <span class="info-label">🕒 開催日時</span>
+                <span class="info-value">{{ event['datetime'] | replace('-', '/') }}</span>
+            </div>
+            
+            <div class="info-group">
+                <span class="info-label">🪙 参加ボーナスポイント</span>
+                <span class="bonus-badge">+{{ event['bonus_points'] }} pt</span>
+            </div>
+            <div class="info-group">
+                <span class="info-label">🎁 参加者向け特典</span>
+                <span class="info-value">{{ event['reward_details'] or '特典の提供はありません' }}</span>
+            </div>
+        </div>
+
+        <div style="margin-bottom: 15px;">
+            {% if completed %}
+                <div class="alert-joined">✔ このイベントは参加完了済みです</div>
+            {% elif reserved %}
+                <div class="alert-joined">
+                    📅 このイベントは開催前です（予約済み）<br>
+                    <span style="font-size: 12px; font-weight: normal; opacity: 0.8;">開催日時になると、ホームの予約イベントから活動計測を開始できます。</span>
+                </div>
+                <form action="{{ url_for('event_reserve', event_id=event['id']) }}" method="POST" style="margin-top: 10px;">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <input type="hidden" name="action" value="cancel">
+                    <button type="submit" class="btn-back">予約を取り消す</button>
+                </form>
+            {% else %}
+                <div class="alert-joined" style="margin-bottom: 10px;">📅 このイベントは開催前です。開催日時をご確認ください。</div>
+                <form action="{{ url_for('event_reserve', event_id=event['id']) }}" method="POST">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <input type="hidden" name="action" value="reserve">
+                    <button type="submit" class="btn-reserve">このイベントを予約する</button>
+                </form>
+            {% endif %}
+        </div>
+
+        <div>
+            <a href="{{ url_for('home') }}" class="btn-back">← 一覧に戻る</a>
+        </div>
+    </div>
+
+</body>
+</html>

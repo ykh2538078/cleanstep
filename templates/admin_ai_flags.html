@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CleanStep - 不正検知ログ</title>
+
+    <style>
+        :root {
+            --primary-green: #2b8a3e;
+            --bg-gray: #f8f9fa;
+            --border-gray: #dee2e6;
+            --text-dark: #212529;
+            --text-muted: #6c757d;
+            --danger-red: #c0392b;
+            --warning-orange: #e67e22;
+            --info-blue: #2980b9;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: var(--bg-gray);
+            color: var(--text-dark);
+            margin: 0;
+            padding: 0;
+        }
+
+        nav {
+            background: #ffffff;
+            border-bottom: 1px solid var(--border-gray);
+            padding: 14px 20px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+        }
+
+        nav a {
+            text-decoration: none;
+            color: var(--text-muted);
+            font-weight: 700;
+        }
+
+        .container {
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 30px 20px;
+        }
+
+        .hover-card {
+            background: #ffffff;
+            border: 1px solid var(--border-gray);
+            border-radius: 8px;
+            padding: 19px;
+            margin-bottom: 25px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.04);
+            transition: transform 0.2s ease-out, box-shadow 0.2s ease-out;
+        }
+        .hover-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 6px 12px rgba(0,0,0,0.08);
+        }
+
+        .card-title {
+            font-size: 1.2rem;
+            font-weight: 800;
+            margin: 0;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }
+        th, td {
+            padding: 12px;
+            border-bottom: 1px solid var(--border-gray);
+            text-align: left;
+        }
+        th {
+            background-color: #ffffff;
+            font-weight: 700;
+        }
+        td {
+            background-color: #ffffff;
+            font-size: 0.9rem;
+        }
+
+        .thumb {
+            width: 70px;
+            height: 70px;
+            object-fit: cover;
+            border-radius: 6px;
+            border: 1px solid var(--border-gray);
+        }
+
+        .flag {
+            color: var(--danger-red);
+            font-weight: 700;
+        }
+
+        .btn-detail {
+            background-color: var(--info-blue);
+            color: #fff;
+            padding: 6px 12px;
+            border-radius: 6px;
+            border: none;
+            font-weight: 700;
+            cursor: pointer;
+        }
+        .btn-detail:hover {
+            background-color: #1f6a8a;
+        }
+
+        .btn-warn {
+            background-color: var(--warning-orange);
+            color: #fff;
+            padding: 6px 12px;
+            border-radius: 6px;
+            border: none;
+            font-weight: 700;
+            cursor: pointer;
+        }
+        .btn-warn:disabled, .btn-ban:disabled {
+            background-color: #adb5bd;
+            cursor: not-allowed;
+            opacity: 0.75;
+        }
+
+        .btn-ban {
+            background-color: var(--danger-red);
+            color: #fff;
+            padding: 6px 12px;
+            border-radius: 6px;
+            border: none;
+            font-weight: 700;
+            cursor: pointer;
+        }
+        .btn-ban:hover {
+            background-color: #a93226;
+        }
+        .btn-warn:disabled:hover, .btn-ban:disabled:hover {
+            background-color: #adb5bd;
+        }
+    </style>
+</head>
+
+<body>
+
+    <nav>
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+            <a href="{{ url_for('admin_dashboard') }}">← 管理メニューに戻る</a>
+            <span style="font-weight:800; font-size:1.2rem;">⚠ 不正検知ログ</span>
+            <a href="{{ url_for('logout') }}" style="color:var(--primary-green); font-weight:700;">ログアウト</a>
+        </div>
+    </nav>
+
+    <div class="container">
+
+        <div class="hover-card" style="border-left:5px solid var(--danger-red);">
+            <h2 class="card-title">🚨 不正疑い一覧</h2>
+            <p class="muted">AIが不正の可能性を検知した記録です。管理者のみ閲覧可能。</p>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>画像</th>
+                        <th>ユーザー</th>
+                        <th>メールアドレス</th>
+                        <th>理由</th>
+                        <th>日時</th>
+                        <th>詳細</th>
+                        <th>警告</th>
+                        <th>停止</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {% for flag in flags %}
+                    <tr>
+                        <td>{% if flag.image_url %}<img src="{{ flag.image_url }}" class="thumb" alt="判定画像">{% else %}-{% endif %}</td>
+                        <td>{{ flag.user_name or 'ユーザー情報なし' }}</td>
+                        <td>{{ flag.email or '-' }}</td>
+                        <td class="flag">{{ flag.flag_reason or '理由未保存（旧ログ）' }}</td>
+                        <td>{{ flag.timestamp }}</td>
+                        <td>
+                            <a href="{{ url_for('admin_ai_log_detail', log_id=flag.log_id) }}" class="btn-detail" style="display:inline-block; text-decoration:none;">詳細</a>
+                        </td>
+                        <td>
+                            <button class="btn-warn" type="button" disabled title="この操作は未実装です">警告</button>
+                        </td>
+                        <td>
+                            <button class="btn-ban" type="button" disabled title="この操作は未実装です">停止</button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+
+        </div>
+
+        <div class="hover-card" style="border-left:5px solid var(--warning-orange);">
+            <h2 class="card-title">同一画像の再送信</h2>
+            <p class="muted">過去にポイントが付与された画像と同一の画像が再送信された記録です。再送信分にはポイントを付与していません。</p>
+            <table>
+                <thead>
+                    <tr>
+                        <th>ユーザー</th>
+                        <th>メールアドレス</th>
+                        <th>元の判定ログ</th>
+                        <th>画像SHA-256</th>
+                        <th>日時</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for attempt in duplicate_attempts %}
+                    <tr>
+                        <td>{{ attempt.user_name or 'ユーザー情報なし' }}</td>
+                        <td>{{ attempt.email or '-' }}</td>
+                        <td>
+                            {% if attempt.original_log_id %}
+                            <a href="{{ url_for('admin_ai_log_detail', log_id=attempt.original_log_id) }}">ログ #{{ attempt.original_log_id }}</a>
+                            {% else %}削除済み{% endif %}
+                        </td>
+                        <td>{{ attempt.image_sha256[:16] }}…</td>
+                        <td>{{ attempt.created_at }}</td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="5">同一画像の再送信はありません。</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+    </div>
+
+</body>
+</html>

@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CleanStep - 特典管理</title>
+
+    <style>
+        :root {
+            --primary-green: #2b8a3e;
+            --primary-light: #f4fbf6;
+            --bg-gray: #f8f9fa;
+            --border-gray: #dee2e6;
+            --text-dark: #212529;
+            --text-muted: #6c757d;
+            --danger-red: #c0392b;
+            --info-blue: #2980b9;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: var(--bg-gray);
+            color: var(--text-dark);
+            margin: 0;
+            padding: 0;
+        }
+
+        nav {
+            background: #ffffff;
+            border-bottom: 1px solid var(--border-gray);
+            padding: 14px 20px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+        }
+
+        nav a {
+            text-decoration: none;
+            color: var(--text-muted);
+            font-weight: 700;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 30px 20px;
+        }
+
+        /* 🌱 カード */
+        .hover-card {
+            background: #ffffff;
+            border: 1px solid var(--border-gray);
+            border-radius: 8px;
+            padding: 19px;
+            margin-bottom: 25px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.04);
+            transition: transform 0.2s ease-out, box-shadow 0.2s ease-out;
+            overflow-x: auto;
+        }
+        .hover-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 6px 12px rgba(0,0,0,0.08);
+        }
+
+        .card-title {
+            font-size: 1.2rem;
+            font-weight: 800;
+            margin: 0;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .muted {
+            color: var(--text-muted);
+            margin-top: 6px;
+        }
+
+        /* 🌱 テーブル */
+        table {
+            width: 100%;
+            min-width: 700px;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }
+        th, td {
+            padding: 12px;
+            border-bottom: 1px solid var(--border-gray);
+            text-align: left;
+        }
+        th {
+            background-color: #ffffff;
+            font-weight: 700;
+        }
+        td {
+            background-color: #ffffff;
+            font-size: 0.9rem;
+        }
+
+        /* 🌱 ボタン */
+        .btn-add {
+            background-color: var(--primary-green);
+            color: #fff;
+            padding: 10px 16px;
+            border-radius: 6px;
+            border: none;
+            font-weight: 700;
+            cursor: pointer;
+            margin-bottom: 15px;
+        }
+        .btn-add:hover {
+            background-color: #256f33;
+        }
+
+        .btn-edit {
+            background-color: var(--info-blue);
+            color: #fff;
+            padding: 6px 12px;
+            border-radius: 6px;
+            border: none;
+            font-weight: 700;
+            cursor: pointer;
+        }
+        .btn-edit:hover {
+            background-color: #1f6a8a;
+        }
+
+        .btn-delete {
+            background-color: var(--danger-red);
+            color: #fff;
+            padding: 6px 12px;
+            border-radius: 6px;
+            border: none;
+            font-weight: 700;
+            cursor: pointer;
+        }
+        .btn-delete:hover {
+            background-color: #a93226;
+        }
+
+        .no-delete {
+            filter: grayscale(1);
+            opacity: 0.65;
+            cursor: not-allowed;
+        }
+
+        @media (max-width: 600px) {
+            .container { padding: 18px 12px; }
+            nav > div { flex-wrap: wrap; gap: 10px; }
+            nav > div > span { order: -1; width: 100%; text-align: center; }
+        }
+    </style>
+</head>
+
+<body>
+
+    <!-- 🌱 ナビバー -->
+    <nav>
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+            <a href="{{ url_for('admin_dashboard') }}">← 管理メニューに戻る</a>
+            <span style="font-weight:800; font-size:1.2rem;">🎁 特典管理</span>
+            <a href="{{ url_for('logout') }}" style="color:var(--primary-green); font-weight:700;">ログアウト</a>
+        </div>
+    </nav>
+
+    <div class="container">
+
+        <!-- 🟨 固定枠：プレミアム商品券 -->
+        <div class="hover-card" style="border-left:5px solid #f1c40f;">
+            <h2 class="card-title">💳 プレミアム商品券（固定枠）</h2>
+            <p class="muted">地域経済に直接貢献する、金銭的価値のある特典です。削除できません。</p>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>特典名</th>
+                        <th>必要ポイント</th>
+                        <th>説明</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>地域プレミアム商品券</td>
+                        <td>{{ premium.cost }}{% if premium.cost != '-' %} pt{% endif %}</td>
+                        <td>{{ premium.description }}</td>
+                        <td>
+                            <button class="btn-edit no-delete" type="button" disabled title="特典編集機能は現在利用できません">編集</button>
+                            <button class="btn-delete no-delete" type="button" disabled>削除不可</button>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- 🟦 汎用ポイント（高レート） -->
+        <div class="hover-card" style="border-left:5px solid #3498db;">
+            <h2 class="card-title">🔁 汎用ポイント（高レート）</h2>
+            <p class="muted">ユーザーの満足度を高める、利便性の高い特典です。削除できません。</p>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>特典名</th>
+                        <th>レート</th>
+                        <th>説明</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for universal in universal_rewards %}
+                    <tr>
+                        <td>{{ universal.name }}</td>
+                        <td>{{ universal.rate }} pt → 1円</td>
+                        <td>{{ universal.description }}</td>
+                        <td>
+                            <button class="btn-edit no-delete" type="button" disabled title="汎用特典の編集機能は現在利用できません">編集</button>
+                            <button class="btn-delete no-delete" type="button" disabled>削除不可</button>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="4">汎用ポイント交換は現在設定されていません。</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <!-- 🟩 地元密着型特典 -->
+        <div class="hover-card" style="border-left:5px solid var(--primary-green);">
+            <h2 class="card-title">🏪 地元密着型特典</h2>
+            <p class="muted">自治体が自由に追加・編集・削除できる地域特典。</p>
+
+            <button class="btn-add" type="button" disabled title="特典の追加処理を現在利用できません">＋ 新しい地元特典を追加する</button>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>特典名</th>
+                        <th>必要ポイント</th>
+                        <th>説明</th>
+                        <th>交換回数</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {% for reward in local_rewards %}
+                    <tr>
+                        <td>{{ reward.name }}</td>
+                        <td>{{ reward.cost }} pt</td>
+                        <td>{{ reward.description }}</td>
+                        <td>{{ reward.exchange_count }} 回</td>
+                        <td>
+                            <button class="btn-edit no-delete" type="button" disabled title="特典編集機能は現在利用できません">編集</button>
+                            <button class="btn-delete no-delete" type="button" disabled title="特典削除機能は現在利用できません">削除</button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+
+        </div>
+
+    </div>
+
+</body>
+</html>

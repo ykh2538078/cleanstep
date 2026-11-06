@@ -1,0 +1,141 @@
+{% from "_event_location_map.html" import event_map_link %}
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>団体イベント管理 | CleanStep</title>
+    <style>
+        :root { color-scheme: light; font-family: "Yu Gothic", Meiryo, sans-serif; color: #263238; background: #f4f7f6; }
+        body { margin: 0; padding: 60px 16px 24px; }
+        main { max-width: 1120px; margin: 0 auto; }
+        header, .month-nav { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+        h1 { font-size: 1.45rem; }
+        a, button { color: #17633f; }
+        .new, button { padding: 10px 14px; border: 0; border-radius: 5px; background: #257a52; color: #fff; font-weight: 700; text-decoration: none; cursor: pointer; }
+        .panel, article { margin: 14px 0; padding: 18px; background: #fff; border: 1px solid #dce5e1; border-radius: 8px; }
+        .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin: 18px 0; }
+        .summary-card { padding: 16px; background: #fff; border: 1px solid #dce5e1; border-radius: 8px; }
+        .summary-number { display: block; color: #257a52; font-size: 1.5rem; font-weight: 700; }
+        .summary-label { color: #596a63; font-size: .9rem; }
+        .calendar { width: 100%; border-collapse: collapse; table-layout: fixed; }
+        .calendar th, .calendar td { border: 1px solid #dce5e1; vertical-align: top; padding: 8px; }
+        .calendar th { background: #edf5f0; }
+        .calendar td { height: 88px; }
+        .outside { background: #f6f7f7; color: #829089; }
+        .day { font-weight: 700; }
+        .calendar-event { display: block; margin-top: 5px; font-size: .82rem; overflow-wrap: anywhere; }
+        .meta { color: #596a63; }
+        .status { font-weight: 700; }
+        .pending { color: #875800; }
+        .approved { color: #17633f; }
+        .rejected, .changes { color: #a33b36; }
+        .cancel { background: #a33b36; }
+        form { display: inline-block; margin-right: 8px; }
+        @media (max-width: 640px) {
+            .calendar th, .calendar td { padding: 4px; font-size: .78rem; }
+            .calendar td { height: 64px; }
+            .calendar-event { font-size: .7rem; }
+            .desktop-only { display: none; }
+        }
+    </style>
+</head>
+<body>
+    {% include "_organizer_navigation.html" %}
+<main>
+    <header>
+        <h1>団体イベント管理</h1>
+        <a class="new" href="{{ url_for('organizer_event_new') }}">イベントを申請</a>
+    </header>
+    <p><a href="{{ url_for('organizer_dashboard') }}">団体ダッシュボードに戻る</a></p>
+
+    {% set status_labels = {'pending': '審査待ち', 'reviewing': '審査中', 'changes_requested': '修正依頼', 'approved': '承認', 'rejected': '却下'} %}
+    {% for event in events if event.review_status in ('changes_requested', 'approved', 'rejected') %}
+        <section class="panel" role="status">
+            <strong>イベント審査のお知らせ：{{ event.name }} — {{ status_labels[event.review_status] }}</strong>
+            {% if event.review_comment %}<p>{{ event.review_comment }}</p>{% endif %}
+            {% if event.review_status == 'changes_requested' %}
+                <a href="{{ url_for('organizer_event_edit', event_id=event.id) }}">内容を修正して再申請</a>
+            {% endif %}
+        </section>
+    {% endfor %}
+
+    <section class="summary-grid" aria-label="主催イベントの活動実績">
+        <div class="summary-card">
+            <span class="summary-number">{{ summary.event_count }}</span>
+            <span class="summary-label">主催イベント数</span>
+        </div>
+        <div class="summary-card">
+            <span class="summary-number">{{ summary.participant_records }}</span>
+            <span class="summary-label">イベント参加記録（延べ）</span>
+        </div>
+        <div class="summary-card">
+            <span class="summary-number">{{ summary.active_reservations }}</span>
+            <span class="summary-label">現在の予約数</span>
+        </div>
+        <div class="summary-card">
+            <span class="summary-number">{{ summary.points_earned }}</span>
+            <span class="summary-label">参加者に付与されたポイント</span>
+        </div>
+    </section>
+    <p class="meta">参加記録はイベントごとの参加完了者数を合計した延べ人数です。予約数は現在有効な予約、ポイントは完了時に記録された実績です。</p>
+
+    <section class="panel">
+        <nav class="month-nav" aria-label="カレンダーの月選択">
+            <a href="{{ url_for('organizer_events', month=previous_month.strftime('%Y-%m')) }}">← 前月</a>
+            <h2>{{ month.year }}年{{ month.month }}月</h2>
+            <a href="{{ url_for('organizer_events', month=next_month.strftime('%Y-%m')) }}">翌月 →</a>
+        </nav>
+        <table class="calendar">
+            <thead><tr>{% for weekday in ['月', '火', '水', '木', '金', '土', '日'] %}<th>{{ weekday }}</th>{% endfor %}</tr></thead>
+            <tbody>
+            {% for week in weeks %}
+                <tr>
+                {% for day in week %}
+                    <td class="{{ 'outside' if day.month != month.month }}">
+                        <span class="day">{{ day.day }}</span>
+                        {% for event in events_by_date.get(day.strftime('%Y-%m-%d'), []) %}
+                            <a class="calendar-event" href="{{ url_for('organizer_event_participants', event_id=event.id) }}">
+                                {{ event.name }}<br><span class="desktop-only">{{ event.datetime[11:16] }} · {{ {'pending': '審査待ち', 'reviewing': '審査中', 'changes_requested': '修正依頼', 'approved': '承認', 'rejected': '却下'}[event.review_status] }}</span>
+                            </a>
+                        {% endfor %}
+                    </td>
+                {% endfor %}
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </section>
+
+    <h2>イベント一覧</h2>
+    {% for event in events %}
+        <article>
+            <h3>{{ event.name }}</h3>
+            <p class="meta">{{ event.datetime }} / {{ event.location }}</p>
+            <p><strong>参加者向け特典:</strong> {{ event.reward_details or 'なし' }}</p>
+            {{ event_map_link(event) }}
+            <p>イベントボーナス: {{ event.bonus_points }} pt / 現在の予約: {{ event.reservations }} 人 / 参加完了者: {{ event.participants }} 人 / 付与済み: {{ event.points_earned }} pt</p>
+            <p class="status {{ 'pending' if event.review_status in ('pending', 'reviewing') else 'changes' if event.review_status in ('changes_requested', 'rejected') else 'approved' }}">
+                審査状態: {{ {'pending': '審査待ち', 'reviewing': '審査中', 'changes_requested': '修正依頼', 'approved': '承認・公開', 'rejected': '却下'}[event.review_status] }}
+                / {{ '募集中' if event.status == 'open' else '中止' }}
+            </p>
+            {% if event.review_comment %}<p>審査コメント: {{ event.review_comment }}</p>{% endif %}
+            <a href="{{ url_for('organizer_event_participants', event_id=event.id) }}">予約者・参加者を見る</a>
+            {% if event.status == 'open' and event.review_status in ('pending', 'changes_requested', 'approved') %}
+                {% if event.participants == 0 and event.reservations == 0 %}
+                    <a href="{{ url_for('organizer_event_edit', event_id=event.id) }}">編集{% if event.review_status == 'changes_requested' %}して再申請{% endif %}</a>
+                {% endif %}
+            {% endif %}
+            {% if event.status == 'open' and event.review_status == 'approved' %}
+                <form method="POST" action="{{ url_for('organizer_event_cancel', event_id=event.id) }}" onsubmit="return confirm('このイベントを中止しますか？');">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <button class="cancel" type="submit">開催を中止</button>
+                </form>
+            {% endif %}
+        </article>
+    {% else %}
+        <p>主催イベントはまだありません。</p>
+    {% endfor %}
+</main>
+</body>
+</html>

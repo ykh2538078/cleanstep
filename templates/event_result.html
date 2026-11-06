@@ -1,0 +1,112 @@
+{% from "_event_location_map.html" import event_map_link %}
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CleanStep - イベント参加結果</title>
+    <style>
+        body { font-family: 'Helvetica Neue', Arial, sans-serif; margin: 0; padding: 0; background-color: #f4f7f6; color: #333; text-align: center; }
+        .header { background: linear-gradient(135deg, #2ecc71, #27ae60); color: white; padding: 20px 64px; font-size: 20px; font-weight: bold; }
+        
+        .container { max-width: 500px; margin: 20px auto; padding: 0 15px; box-sizing: border-box; }
+        /* 白背景・カードの浮き上がり（box-shadow）の再現 */
+        .card { background: white; padding: 25px; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.06); margin-bottom: 20px; text-align: left; }
+        
+        h2 { font-size: 16px; margin: 0 0 15px 0; color: #2c3e50; border-left: 4px solid #2ecc71; padding-left: 8px; font-weight: bold; }
+        
+        /* 📊 活動計測データのグリッド */
+        .data-grid { display: flex; flex-direction: column; gap: 12px; margin-bottom: 5px; }
+        .data-item { background: #f8f9fa; padding: 12px 15px; border-radius: 8px; display: flex; justify-content: space-between; align-items: center; }
+        .data-label { font-size: 14px; color: #566573; }
+        .data-value { font-size: 16px; font-weight: bold; color: #2c3e50; }
+        
+        /* 🤖 🔴 AI判定結果セクション（改ざん防止の絶対基準エリア） */
+        .ai-result-box { display: flex; align-items: center; justify-content: space-between; background: #ebf5fb; border: 1px solid #d4e6f1; padding: 15px; border-radius: 8px; margin-top: 10px; }
+        .ai-count-input { width: 70px; padding: 8px; text-align: center; border: 1px solid #b2babb; border-radius: 6px; font-size: 16px; font-weight: bold; background-color: #e5e8e8; color: #2c3e50; }
+        
+        /* 🪙 ポイント獲得サマリーカード */
+        .points-summary { background: linear-gradient(135deg, #e8f8f5, #d1f2eb); border: 1px solid #a3e4d7; border-radius: 12px; padding: 20px; text-align: center; margin-top: 5px; }
+        .total-earned { font-size: 32px; font-weight: bold; color: #2ecc71; margin: 10px 0; display: block; }
+        
+        /* 🚀 確定確認ボタン（緑グラデーション） */
+        .btn-confirm { display: block; text-align: center; width: 100%; padding: 16px; background: linear-gradient(135deg, #2ecc71, #27ae60); color: white; border: none; border-radius: 30px; font-size: 16px; font-weight: bold; text-decoration: none; box-shadow: 0 6px 15px rgba(46,204,113,0.3); transition: transform 0.2s; box-sizing: border-box; }
+        .btn-confirm:hover { transform: translateY(-2px); }
+        .btn-survey { display: block; text-align: center; width: 100%; padding: 16px; background: #fff; color: #218c59; border: 2px solid #2ecc71; border-radius: 30px; font-size: 16px; font-weight: bold; text-decoration: none; box-sizing: border-box; margin-bottom: 12px; }
+        @media (max-width: 480px) { .header { padding: 18px 60px; font-size: 18px; } }
+    </style>
+</head>
+<body>
+    {% include "_user_navigation.html" %}
+
+    <div class="header">
+        <a href="{{ url_for('home') }}" style="color:white; text-decoration:none;">✅ イベント参加結果</a>
+    </div>
+
+    <div class="container">
+        <div class="card">
+            <h2>1. あなたの活動実績</h2>
+            <div class="data-grid">
+                <div class="data-item">
+                    <span class="data-label">🕒 実活動時間</span>
+                    <span class="data-value">{{ activity.duration_display }}</span>
+                </div>
+                <div class="data-item">
+                    <span class="data-label">🚶 GPS推定歩数／端末計測</span>
+                    <span class="data-value">{% if activity.step_source == 'device' %}{{ "{:,.0f}".format(activity.steps) }} 歩（端末計測）{% elif activity.step_source == 'gps_estimated' %}{{ "{:,.0f}".format(activity.steps) }} 歩（GPS推定）{% else %}未計測{% endif %}</span>
+                </div>
+                <div class="data-item">
+                    <span class="data-label">🗺️ 移動距離</span>
+                    <span class="data-value">{% if activity.gps_measured %}{{ "%.2f"|format(activity.distance) }} km{% else %}未計測{% endif %}</span>
+                </div>
+                <div class="data-item">
+                        <span class="data-label">🔥 消費カロリー（概算）</span>
+                        <span class="data-value">{% if activity.gps_measured %}{{ activity.calories }} kcal（概算）{% else %}未計測{% endif %}</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- 参加したイベント -->
+        <div class="card">
+            <h2>2. 参加したイベント</h2>
+            <p style="font-size: 12px; color: #7f8c8d; margin: 0 0 12px 0; line-height: 1.4;">
+                距離はGPS位置情報から集計し、歩数と消費カロリーは推定・概算です。GPS計測結果が得られなかった場合は未計測と表示します。計測結果が0の場合は0として表示します。これらの値はイベントポイントに影響しません。
+            </p>
+            <div class="ai-result-box">
+                <div style="text-align: left;">
+                    <span style="font-size: 14px; font-weight: bold; color: #2980b9; display: block;">{{ event.name }}</span>
+                    <span style="font-size: 12px; color: #7f8c8d;">📍 {{ event.location }}</span>
+                    <br>{{ event_map_link(event) }}
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>3. 獲得ポイント内訳</h2>
+            <div class="points-summary">
+                <span style="font-size: 13px; color: #566573; font-weight: 500;">今回のイベントで付与されたポイント</span>
+                
+                <span class="total-earned">
+                    +{{ activity.points_earned or 0 }} <span style="font-size: 18px;">pt</span>
+                </span>
+                
+                <div style="font-size: 12px; color: #7f8c8d; border-top: 1px dashed #a3e4d7; padding-top: 10px; margin-top: 10px; text-align: left; line-height: 1.5;">
+                    • イベント参加ボーナス: +{{ activity.points_earned or 0 }} pt<br>
+                    • ポイントは活動完了時に付与済みです。
+                </div>
+            </div>
+        </div>
+
+        <div style="margin: 25px 0 40px 0;">
+            {% if feedback_submitted %}
+                <p role="status" style="color:#218c59;">アンケートへのご協力ありがとうございます。</p>
+            {% else %}
+                <p style="color:#566573; font-size:14px; line-height:1.6;">次回のイベントをより参加しやすくするため、短いアンケートにご協力ください。回答は任意で、参加ポイントには影響しません。</p>
+                <a href="{{ url_for('event_survey', activity_id=activity.id) }}" class="btn-survey">アンケートに回答する</a>
+            {% endif %}
+            <a href="{{ url_for('home') }}" class="btn-confirm">メニューに戻る</a>
+        </div>
+    </div>
+
+</body>
+</html>

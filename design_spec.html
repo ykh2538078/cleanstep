@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CleanStep - 画面設計仕様書（プロダクト仕様準拠）</title>
+    <style>
+        /* 💡 フォーマル・シンプル・高コントラスト設計 */
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background-color: #f8fafc; color: #1e293b; margin: 0; padding: 40px 20px; line-height: 1.6; }
+        .spec-container { max-width: 1040px; margin: 0 auto; background: white; padding: 48px; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.05), 0 1px 2px rgba(0,0,0,0.1); border: 1px solid #e2e8f0; }
+        
+        /* メタヘッダー：信頼感のある精悍なネイビー（#0f172a） */
+        .meta-header { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2px solid #0f172a; padding-bottom: 20px; margin-bottom: 32px; }
+        @media (max-width: 768px) { .meta-header { flex-direction: column; align-items: flex-start; gap: 16px; } }
+        h1 { font-size: 26px; color: #0f172a; margin: 0; font-weight: 800; letter-spacing: -0.5px; }
+        .meta-info { font-size: 13px; color: #475569; text-align: right; line-height: 1.5; }
+        @media (max-width: 768px) { .meta-info { text-align: left; } }
+        
+        /* 開発ポリシー：引き締まったブルーグレーのバナー */
+        .policy-banner { background: #f1f5f9; border-left: 4px solid #475569; color: #334155; padding: 16px 20px; border-radius: 0 8px 8px 0; margin-bottom: 40px; font-size: 14px; font-weight: 600; }
+        
+        /* 画面仕様ブロック：白背景に薄いボーダーでノイズを徹底排除 */
+        .screen-block { background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 32px; margin-bottom: 48px; display: grid; grid-template-columns: 1.1fr 0.9fr; gap: 32px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.01), 0 2px 4px -1px rgba(0,0,0,0.01); }
+        @media (max-width: 868px) { .screen-block { grid-template-columns: 1fr; padding: 20px; } }
+        
+        .screen-meta { display: flex; flex-direction: column; gap: 16px; }
+        .screen-id { display: inline-block; background: #334155; color: white; padding: 3px 12px; border-radius: 4px; font-size: 11px; font-weight: 700; width: fit-content; letter-spacing: 0.5px; }
+        h2 { font-size: 20px; color: #0f172a; margin: 0; font-weight: 800; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px; }
+        
+        /* テーブル：ピンクを完全排除、凛としたフォーマルグレーへ */
+        .table-spec { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 4px; }
+        .table-spec th, .table-spec td { border: 1px solid #e2e8f0; padding: 12px; text-align: left; }
+        .table-spec th { background: #f8fafc; font-weight: 700; color: #1e293b; width: 28%; }
+        .table-spec td { color: #334155; white-space: normal; word-break: break-all; }
+        
+        /* 簡易ワイヤーフレーム：極限までシンプルに、データの並び順だけを可視化 */
+        .wireframe-box { background: #ffffff; border: 1px solid #cbd5e1; border-radius: 8px; padding: 24px; display: flex; flex-direction: column; gap: 14px; min-height: 320px; box-sizing: border-box; }
+        .wire-header { background: #0f172a; color: white; padding: 8px; text-align: center; border-radius: 4px; font-size: 11px; font-weight: 700; letter-spacing: 0.5px; }
+        .wire-card { background: #f8fafc; border: 1px solid #e2e8f0; padding: 12px; border-radius: 6px; font-size: 12px; color: #334155; }
+        .wire-btn { background: #0f172a; color: white; padding: 12px; text-align: center; border-radius: 6px; font-size: 12px; font-weight: 700; }
+        .wire-btn.secondary { background: #f1f5f9; color: #0f172a; border: 1px solid #cbd5e1; }
+        .wire-point { font-size: 26px; font-weight: 800; color: #0f172a; text-align: center; margin: 12px 0; font-family: monospace; }
+    </style>
+</head>
+<body>
+
+<div class="spec-container">
+    <div class="meta-header">
+        <div>
+            <h1>CleanStep 画面設計仕様書</h1>
+            <div style="font-size: 14px; color: #475569; margin-top: 6px; font-weight: 500;">地域循環型エコシステム構築プロトタイプ（PoC仕様）</div>
+        </div>
+        <div class="meta-info">
+            <div><b>システム名称:</b> 地域ごみ拾いポイントシステム</div>
+            <div><b>改訂日:</b> 2026/09/08 | <b>提出区分:</b> 最終成果物</div>
+            <div><b>設計思想:</b> MVP（最小実用版）開発ポリシー準拠</div>
+        </div>
+    </div>
+
+    <div class="policy-banner">
+        【共通ドメイン設計】スマートフォン振り子や位置情報偽装（チート）によるインフレを防止するため、歩数・距離・消費カロリー等の健康データは活動実績の可視化にのみ利用し、ポイント計算ロジックからは厳密に除外する。
+    </div>
+
+    <!-- SCREEN 01 -->
+    <div class="screen-block">
+        <div class="screen-meta">
+            <span class="screen-id">SCREEN 01</span>
+            <h2>ログイン画面</h2>
+            <table class="table-spec">
+                <tr><th>画面説明</th><td>利用者の識別、および個別データ（ポイント・活動履歴）を切り替えるための認証画面。</td></tr>
+                <tr><th>デモ動作条件</th><td>プルダウンから王道デモ用の「テストユーザー（初期保有: 350 pt）」を選択した状態。</td></tr>
+                <tr><th>非機能の割り切り</th><td>評価検証におけるユーザー切り替えの手間をゼロ化し、UI/UXの連動を最速でテストするため、意図的にパスワード入力を省いた簡易選択式を採用。</td></tr>
+                <tr><th>遷移・バックエンド</th><td>ログインボタン押下 ➔ <b>02 トップメニュー（初期状態）</b>へ遷移。選択したIDをFlaskのセッション（`session['user_id']`）へ安全に保持。</td></tr>
+            </table>
+        </div>
+        <div class="wireframe-box">
+            <div class="wire-header">CleanStep — SIGN IN</div>
+            <div style="text-align: center; font-size: 13px; margin: 16px 0; color: #475569; font-weight: 500;">デモ用 利用者選択</div>
+            <div class="wire-card" style="text-align: center; font-weight: 700; background: #fff;">▼ テストユーザー（保有: 350 pt）</div>
+            <div class="wire-btn" style="margin-top: auto;">システムにログイン</div>
+        </div>
+    </div>
+
+    <!-- SCREEN 02 -->
+    <div class="screen-block">
+        <div class="screen-meta">
+            <span class="screen-id">SCREEN 02</span>
+            <h2>トップメニュー（初期状態）</h2>
+            <table class="table-spec">
+                <tr><th>画面説明</th><td>システムのメインダッシュボード。現在の保有ポイント、参加可能な5大地域イベント、活動・交換履歴を統合表示。</td></tr>
+                <tr><th>デモ動作条件</th><td>ログイン直後の初期状態。データベースの初期シード値に基づき、保有ポイントは<b>350 pt</b>、履歴は初期ログのみをレンダリング。</td></tr>
+                <tr><th>UIコピーの最適化</th><td>文言を「活動履歴」から「あなたの活動・交換履歴」へ変更。ポイントの獲得（インフロー）と消費（アウトフロー）を1つのタイムラインに一貫させる。</td></tr>
+                <tr><th>遷移・バックエンド</th><td>「詳細・参加」リンク押下 ➔ <b>03 イベント詳細・参加（計測中）</b>へ遷移。</td></tr>
+            </table>
+        </div>
+        <div class="wireframe-box">
+            <div class="wire-header">CleanStep — DASHBOARD</div>
+            <div class="wire-card" style="text-align: center;">現在のマイポイント<div class="wire-point">350 pt</div></div>
+            <div class="wire-card" style="background: #fff; border-color: #0f172a;">
+                <b>📍 みなとみらい清掃イベント</b> <span style="font-weight:700; float:right;">+50 pt</span>
+                <div style="font-size:11px; color:#475569; margin-top:4px;">📅 2026-10-10 | 📍 横浜みなとみらい公園</div>
+                <div class="wire-btn" style="margin-top:8px; padding:6px; font-size:11px;">詳細・参加</div>
+            </div>
+            <div class="wire-card"><b>📜 あなたの活動・交換履歴</b><div style="margin-top:4px; font-size:11px; color:#475569;">08/30 駅前清掃 ＋80 pt</div></div>
+        </div>
+    </div>
+
+    <!-- SCREEN 03 -->
+    <div class="screen-block">
+        <div class="screen-meta">
+            <span class="screen-id">SCREEN 03</span>
+            <h2>イベント詳細・参加（計測中）</h2>
+            <table class="table-spec">
+                <tr><th>画面説明</th><td>清掃イベント実施中の経過時間と、スマートフォンセンサーから取得した活動量をリアルタイムに可視化する画面。</td></tr>
+                <tr><th>デモ動作条件</th><td>活動時間（00:12:34）、歩数（1842歩）、距離（1.24km）、カロリー（56kcal）がカウントアップし、回収ゴミの数に王道デモ用の<b>「5個」</b>が入力された状態。</td></tr>
+                <tr><th>外部APIの除外</th><td>サードパーティ製地図APIの統合に伴うインフラコスト、従量課金、キー秘匿要件を回避するため、地図コンポーネントはフェーズ2へ戦略的に除外。</td></tr>
+                <tr><th>遷移・バックエンド</th><td>「活動を終了する」ボタン押下 ➔ 確定したゴミ数「5個」をPOSTリクエストで送信し、<b>04 イベント終了・活動結果</b>へ遷移。</td></tr>
+            </table>
+        </div>
+        <div class="wireframe-box">
+            <div class="wire-header">CleanStep — ACTIVITY TRACKING</div>
+            <div class="wire-card" style="text-align: center; font-size: 15px; font-weight: 700;">⏱ 活動時間：00:12:34</div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                <div class="wire-card" style="text-align:center;">🚶 1,842 歩</div>
+                <div class="wire-card" style="text-align:center;">🗺 1.24 km</div>
+            </div>
+            <div class="wire-card" style="background: #fff; text-align: center;">
+                <label style="font-weight:700;">🗑 回収ゴミの数：</label>
+                <input type="number" value="5" style="width:40px; text-align:center; font-weight:bold;"> 個
+            </div>
+            <div class="wire-btn" style="background:#334155;">活動を終了して結果を確認</div>
+        </div>
+    </div>
+
+    <!-- SCREEN 04 -->
+    <div class="screen-block">
+        <div class="screen-meta">
+            <span class="screen-id">SCREEN 04</span>
+            <h2>イベント終了・活動結果</h2>
+            <table class="table-spec">
+                <tr><th>画面説明</th><td>清掃アクティビティ完了時の成果提示画面。バックエンドで算出された確定エコインセンティブと運動実績をリザルト表示。</td></tr>
+                <tr><th>デモ動作条件</th><td>前画面から安全に引き継がれたデータに基づき、獲得インセンティブが<b>＋100 pt</b>（ゴミ5個×10pt=50pt ＋ イベント固有ボーナス50pt）と明示された状態。</td></tr>
+                <tr><th>整合性の担保</th><td>Flaskのコントローラー（`event_finish`）からテンプレートへ変数を動的バインディングし、設計上の期待値と1ミリのズレもない同期を完了。</td></tr>
+                <tr><th>遷移・バックエンド</th><td>「トップメニューへ戻る」ボタン押下 ➔ ユーザーのポイントを加算更新（インクリメント）し、<b>05 トップメニュー（反映後）</b>へ遷移。</td></tr>
+            </table>
+        </div>
+        <div class="wireframe-box" style="text-align: center;">
+            <div class="wire-header">CleanStep — ACTIVITY RESULT</div>
+            <div class="wire-card" style="background: #fff; border-color: #0f172a;">
+                <div style="font-size:11px; color:#475569; font-weight:bold;">エコインセンティブ獲得</div>
+                <div class="wire-point">＋100 pt</div>
+                <div style="font-size:10px; color:#475569;">（内訳: ごみ 5個 × 10pt ＋ ボーナス 50pt）</div>
+            </div>

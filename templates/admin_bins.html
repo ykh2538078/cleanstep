@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CleanStep - ごみ箱設置場所管理</title>
+
+    <style>
+        :root {
+            --primary-green: #2b8a3e;
+            --primary-light: #f4fbf6;
+            --bg-gray: #f8f9fa;
+            --border-gray: #dee2e6;
+            --text-dark: #212529;
+            --text-muted: #6c757d;
+            --danger-red: #c0392b;
+            --info-blue: #2980b9;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: var(--bg-gray);
+            color: var(--text-dark);
+            margin: 0;
+            padding: 0;
+        }
+
+        nav {
+            background: #ffffff;
+            border-bottom: 1px solid var(--border-gray);
+            padding: 14px 20px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+        }
+
+        nav a {
+            text-decoration: none;
+            color: var(--text-muted);
+            font-weight: 700;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 30px 20px;
+        }
+
+        /* 🌱 カードの浮き上がり */
+        .hover-card {
+            background: #ffffff;
+            border: 1px solid var(--border-gray);
+            border-radius: 8px;
+            padding: 19px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.04);
+            transition: transform 0.2s ease-out, box-shadow 0.2s ease-out, background-color 0.2s ease-out;
+            overflow-x: auto;
+        }
+        .hover-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 6px 12px rgba(0,0,0,0.08);
+            background-color: #fafdfb;
+        }
+        .hover-card:hover .card-icon {
+            transform: translateY(-2px);
+        }
+        .card-icon {
+            transition: transform 0.2s ease-out;
+        }
+
+        /* 🌱 テーブル */
+        table {
+            width: 100%;
+            min-width: 680px;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }
+        th, td {
+            padding: 12px;
+            border-bottom: 1px solid var(--border-gray);
+            text-align: left;
+        }
+        th {
+            background-color: #ffffff;
+            font-weight: 700;
+            color: var(--text-dark);
+        }
+        td {
+            background-color: #ffffff;
+            font-size: 0.9rem;
+        }
+
+        .muted {
+            color: var(--text-muted);
+        }
+
+        /* 🌱 操作ボタン */
+        .btn-add {
+            background-color: var(--primary-green);
+            color: #fff;
+            padding: 10px 16px;
+            border-radius: 6px;
+            border: none;
+            font-weight: 700;
+            cursor: pointer;
+            margin-bottom: 15px;
+        }
+        .btn-add:hover {
+            background-color: #256f33;
+        }
+
+        .btn-edit {
+            background-color: var(--info-blue);
+            color: #fff;
+            padding: 6px 12px;
+            border-radius: 6px;
+            border: none;
+            font-weight: 700;
+            cursor: pointer;
+        }
+        .btn-edit:hover {
+            background-color: #1f6a8a;
+        }
+
+        .btn-delete {
+            background-color: var(--danger-red);
+            color: #fff;
+            padding: 6px 12px;
+            border-radius: 6px;
+            border: none;
+            font-weight: 700;
+            cursor: pointer;
+        }
+        .btn-delete:hover {
+            background-color: #a93226;
+        }
+
+        @media (max-width: 600px) {
+            .container { padding: 18px 12px; }
+            nav > div { flex-wrap: wrap; gap: 10px; }
+            nav > div > span { order: -1; width: 100%; text-align: center; }
+        }
+    </style>
+</head>
+
+<body>
+
+    <!-- 🌱 ナビバー -->
+    <nav>
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+            <a href="{{ url_for('admin_dashboard') }}">← 管理メニューに戻る</a>
+            <span style="font-weight:800; font-size:1.2rem;">🗑 ごみ箱設置場所管理</span>
+            <a href="{{ url_for('logout') }}" style="color:var(--primary-green); font-weight:700;">ログアウト</a>
+        </div>
+    </nav>
+
+    <div class="container">
+
+        <!-- 🌱 ごみ箱一覧カード -->
+        <div class="hover-card" style="border-left:5px solid var(--primary-green);">
+            <h2 style="font-size:1.3rem; font-weight:800; margin:0;">
+                <span class="card-icon">📍</span> 設置場所一覧
+            </h2>
+            <p class="muted" style="margin-top:6px;">
+                ごみ箱の設置場所・利用回数・編集・削除を管理できます。
+            </p>
+
+            <!-- 追加ボタン -->
+            <a href="{{ url_for('add_bin') }}" class="btn-add" style="display:inline-block; text-decoration:none;">＋ 新しい設置場所を追加する</a>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>設置場所名</th>
+                        <th>住所 / 説明</th>
+                        <th>地図ピン（緯度・経度）</th>
+                        <th>利用回数</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {% for bin in bins %}
+                    <tr>
+                        <td>{{ bin.name }}</td>
+                        <td>{{ bin.description }}</td>
+                        <td>{{ "%.6f"|format(bin.lat) }}, {{ "%.6f"|format(bin.lng) }}</td>
+                        <td>{{ bin.usage_count }} 回</td>
+                        <td>
+                            <a href="{{ url_for('edit_bin', bin_id=bin.id) }}" class="btn-edit" style="text-decoration:none;">編集</a>
+                            <form action="{{ url_for('delete_bin', bin_id=bin.id) }}" method="POST" style="display:inline;" onsubmit="return confirm('削除しますか？');">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                <button type="submit" class="btn-delete">削除</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="5" class="muted">ごみ箱の設置場所は未登録です。</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+
+        </div>
+
+    </div>
+
+</body>
+</html>

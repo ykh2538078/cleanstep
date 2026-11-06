@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>イベント編集 | CleanStep</title>
+    <style>
+        :root { --primary-green: #2b8a3e; --bg-gray: #f8f9fa; --border-gray: #dee2e6; --text-dark: #212529; --text-muted: #6c757d; }
+        body { margin: 0; background: var(--bg-gray); color: var(--text-dark); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }
+        .top-nav { padding: 14px 20px; border-bottom: 1px solid var(--border-gray); background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.04); }
+        .top-nav-inner { display: flex; justify-content: space-between; align-items: center; max-width: 1100px; margin: 0 auto; padding: 0 56px; }
+        .top-nav a { color: var(--text-muted); font-weight: 700; text-decoration: none; }
+        .top-nav-title { color: var(--text-dark); font-size: 1.2rem; font-weight: 800; }
+        main { max-width: 1100px; margin: 0 auto; padding: 30px 20px; }
+        .event-card { display: flex; justify-content: space-between; align-items: center; gap: 20px; margin: 14px 0; padding: 22px; border: 1px solid var(--border-gray); border-radius: 10px; background: #fff; box-shadow: 0 2px 4px rgba(0,0,0,.04); }
+        h1 { margin-top: 0; }
+        h2 { margin: 0 0 8px; font-size: 1.1rem; }
+        p { color: var(--text-muted); }
+        .status { color: var(--text-dark); }
+        .btn { flex: 0 0 auto; padding: 10px 16px; border-radius: 6px; background: var(--primary-green); color: #fff; font-weight: 700; text-decoration: none; }
+        .empty { padding: 24px; border: 1px solid var(--border-gray); border-radius: 10px; background: #fff; color: var(--text-muted); }
+        @media (max-width: 640px) { .event-card { align-items: stretch; flex-direction: column; } .btn { text-align: center; } .top-nav-title { font-size: 1rem; } }
+    </style>
+</head>
+<body>
+    {% include "_organizer_navigation.html" %}
+    <nav class="top-nav">
+        <div class="top-nav-inner">
+            <a href="{{ url_for('organizer_dashboard') }}">CleanStep 団体メニュー</a>
+            <span class="top-nav-title">イベント編集</span>
+            <span aria-hidden="true"></span>
+        </div>
+    </nav>
+    <main>
+        <p><a href="{{ url_for('organizer_dashboard') }}">← 団体ダッシュボード</a></p>
+        <h1>編集するイベントを選択</h1>
+        <p>予約または参加記録があるイベントは編集できません。</p>
+        {% for event in events %}
+            <article class="event-card">
+                <div>
+                    <h2>{{ event.name }}</h2>
+                    <p>{{ event.datetime }} / {{ event.location }}</p>
+                    <p class="status">審査状態: {{ {'pending': '審査待ち', 'changes_requested': '修正依頼', 'approved': '承認・公開'}[event.review_status] }}</p>
+                    {% if event.review_comment %}<p>審査コメント: {{ event.review_comment }}</p>{% endif %}
+                </div>
+                <a class="btn" href="{{ url_for('organizer_event_edit', event_id=event.id) }}">{% if event.review_status == 'changes_requested' %}修正して再申請{% else %}イベントを編集{% endif %}</a>
+            </article>
+        {% else %}
+            <p class="empty">現在編集できるイベントはありません。</p>
+        {% endfor %}
+    </main>
+</body>
+</html>

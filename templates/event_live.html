@@ -1,0 +1,344 @@
+{% from "_event_location_map.html" import event_map_link %}
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CleanStep - 活動計測中</title>
+    <style>
+        body { font-family: 'Helvetica Neue', Arial, sans-serif; margin: 0; padding: 0; background-color: #f4f7f6; color: #333; text-align: center; }
+        .header { background: linear-gradient(135deg, #2ecc71, #27ae60); color: white; padding: 20px; font-size: 20px; font-weight: bold; position: relative; }
+        .back-btn { position: absolute; left: 62px; top: 18px; color: white; text-decoration: none; font-size: 14px; background: rgba(255,255,255,0.2); padding: 6px 12px; border-radius: 20px; }
+        
+        .container { max-width: 500px; margin: 20px auto; padding: 0 15px; box-sizing: border-box; }
+        .card { background: white; padding: 25px; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.06); margin-bottom: 20px; text-align: left; }
+        
+        .status-badge { display: inline-block; background-color: #fce4d6; color: #e74c3c; font-weight: bold; padding: 6px 14px; border-radius: 20px; font-size: 14px; margin-bottom: 15px; }
+        .event-title { font-size: 24px; font-weight: bold; color: #2c3e50; margin: 0 0 5px 0; }
+        .event-location { color: #7f8c8d; font-size: 14px; line-height: 1.6; margin-bottom: 30px; }
+        
+        /* 計測データエリア */
+        .measurement-group { display: flex; flex-direction: column; gap: 18px; margin: 20px 0 32px; }
+        .measure-item { background: #f8f9fa; padding: 15px; border-radius: 10px; border-left: 4px solid #2ecc71; display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+        .measure-label { font-size: 14px; color: #566573; font-weight: bold; }
+        .measure-value { font-size: 20px; font-weight: bold; color: #2c3e50; }
+        .gps-button { width: 100%; padding: 14px 12px; margin-top: 8px; border: 1px solid #27ae60; border-radius: 10px; background: #fff; color: #218c54; font-size: 15px; font-weight: bold; cursor: pointer; }
+        .gps-status { min-height: 1.5em; margin: 16px 0 28px; color: #566573; font-size: 13px; line-height: 1.7; }
+        
+        /* ⚠️ 不正取得防止策の警告ボックス */
+        .warning-box { background-color: #fef9e7; border: 1px solid #f9e79f; border-radius: 10px; padding: 15px; margin-bottom: 25px; text-align: left; }
+        .warning-title { font-size: 13px; color: #b7950b; font-weight: bold; margin-bottom: 6px; display: block; }
+        .warning-text { font-size: 12px; color: #7d6608; line-height: 1.5; margin: 0; }
+
+        /* 🚀 活動終了アクションボタン（緑グラデーション） */
+        .btn-complete { width: 100%; padding: 16px; background: linear-gradient(135deg, #2ecc71, #27ae60); color: white; border: none; border-radius: 30px; font-size: 16px; font-weight: bold; cursor: pointer; box-shadow: 0 6px 15px rgba(46,204,113,0.3); transition: transform 0.2s; }
+        .btn-complete:hover { transform: translateY(-2px); }
+        
+        /* 成果報告確認通知（実際の強固なDB制約に合わせた正確な文面に書き換え） */
+        .success-box { background-color: #e8f8f5; border: 1px solid #a3e4d7; border-radius: 10px; padding: 15px; text-align: left; margin-top: 15px; }
+        .success-title { font-size: 13px; color: #16a085; font-weight: bold; margin-bottom: 4px; display: block; }
+        .success-text { font-size: 12px; color: #117a65; line-height: 1.5; margin: 0; }
+
+        /* 🪙 浮き上がる獲得演出カード（未定義だった閉じタグを修復） */
+        .hover-card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); margin-top: 20px; display: none; }
+        .points-card-animate { animation: popUp 0.4s ease-out forwards; }
+        @keyframes popUp { 0% { transform: scale(0.8); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
+        @media (max-width: 480px) {
+            .header { padding: 18px 60px; font-size: 18px; }
+            .back-btn { top: 12px; left: 10px; min-height: 44px; display: inline-flex; align-items: center; box-sizing: border-box; }
+            .container { margin: 14px auto; padding: 0 12px; }
+            .card { padding: 20px 16px; }
+            .event-title { font-size: 21px; overflow-wrap: anywhere; }
+            .measure-item { gap: 12px; padding: 14px 12px; }
+            .measure-value { text-align: right; }
+            .btn-complete { min-height: 54px; border-radius: 14px; }
+        }
+    </style>
+</head>
+<body>
+    {% include "_user_navigation.html" %}
+
+    <!-- マイページ（/home）へ安全に戻れるヘッダー設計 -->
+    <div class="header">
+        <a href="{{ url_for('home') }}" class="back-btn">✕ 戻る</a>
+        <a href="{{ url_for('home') }}" style="color:white; text-decoration:none;">📅 活動計測</a>
+    </div>
+
+    <div class="container">
+        <div class="card">
+            <div class="status-badge">🔴 活動時間を計測中</div>
+            
+            <!-- 🔑 Python（app.py）から引き渡されたイベントデータを動的に描画 -->
+            <div class="event-title">{{ event['name'] }}</div>
+            <div class="event-location">
+                📍 現地エリア：{{ event['location'] }}<br>
+                {{ event_map_link(event) }}
+            </div>
+            
+            <p class="success-text">イベント完了には最低{{ min_duration_minutes }}分間の計測が必要です。</p>
+            {% if location_check_required %}
+                <p class="warning-text">開催地点が登録されているため、完了時に開催地点から{{ location_radius_meters }}m以内のGPS位置情報を確認します。</p>
+            {% endif %}
+            <div class="measurement-group">
+                <div class="measure-item">
+                    <span class="measure-label">⏱ 計測開始から</span>
+                    <span class="measure-value" style="color: #e74c3c;" id="timer_val">00:00:00</span>
+                </div>
+                <div class="measure-item">
+                    <span class="measure-label">🚶 推定歩数</span>
+                    <span class="measure-value" id="steps_val">未計測</span>
+                </div>
+                <div class="measure-item">
+                    <span class="measure-label">🗺 GPS移動距離</span>
+                    <span class="measure-value" id="distance_val">未計測</span>
+                </div>
+                <div class="measure-item">
+                    <span class="measure-label">🔥 推定消費カロリー</span>
+                    <span class="measure-value" id="calories_val">未計測</span>
+                </div>
+            </div>
+            <button type="button" class="gps-button" id="gps_toggle">GPS計測を開始</button>
+            <p class="gps-status" id="gps_status" role="status" aria-live="polite">{% if location_check_required %}このイベントは開催地点でのGPS確認が必要です。{% else %}GPS計測は任意です。位置情報を使わずにイベントを完了できます。{% endif %}</p>
+            <p class="gps-status" id="motion_status" aria-live="polite">歩数センサーはGPS計測開始時に確認します。利用できない場合はGPSから推定します。</p>
+            
+            <!-- ⚠ 計測値の説明 -->
+            <div class="warning-box">
+                <span class="warning-title">⚠ 計測値について：</span>
+                <p class="warning-text">移動距離はGPSから集計します。歩数センサーが使える場合は端末の加速度センサーで測定し、使えない場合はGPS距離から推定します。消費カロリーは体重70kgを仮定した概算です。GPSの誤差があるため参考値であり、イベントポイントの算出には使用しません。位置情報は完了時に集計値だけを保存し、生の位置履歴は保存しません。</p>
+            </div>
+
+            <!-- ✅ イベント参加結果の確認 -->
+            <div class="success-box">
+                <span class="success-title">✅ イベント参加の記録</span>
+                <p class="success-text">最低{{ min_duration_minutes }}分間の計測後に活動を終了すると、参加履歴とイベントボーナスが記録されます。{% if location_check_required %}開催地点から{{ location_radius_meters }}m以内のGPS確認が必要です。{% else %}GPS計測を行わなかった場合、距離・歩数・カロリーは未計測になります。{% endif %}</p>
+            </div>
+        </div>
+
+        <!-- 🔑 【🔴最優先：送信先URLの修復】：app.pyの正しいイベント完了エンドポイントを指定 -->
+        <!-- 🔒 onsubmit から欠落していたJavaScript関数を安全にキック -->
+        <form action="{{ url_for('event_complete', event_id=event['id']) }}" method="POST" style="margin: 20px 0 40px 0;" onsubmit="return handleLiveSubmit(event);">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="duration" id="duration_input" value="0">
+            <input type="hidden" name="detox_duration" id="detox_input" value="0">
+            <input type="hidden" name="gps_points" id="gps_points_input" value="[]">
+            <input type="hidden" name="device_steps" id="device_steps_input" value="">
+            <button type="submit" class="btn-complete" id="submit_btn">⏹ 活動を終了して記録を確定</button>
+        </form>
+
+        <!-- 🪙 【修復完了】：途切れていた浮き上がるポイント演出カードのコンテナ -->
+        <div class="hover-card points-card-animate" id="points-card">
+            <h3 style="color: #2ecc71; margin: 0 0 10px 0;">イベント参加の記録</h3>
+            <p style="margin: 0; font-size: 15px; font-weight: bold; color: #566573;">
+                完了後にイベントボーナス <span style="font-size: 22px; color: #2ecc71;">+{{ event['bonus_points'] }}</span> pt が記録されます。
+            </p>
+        </div>
+    </div>
+
+    <script>
+        const startedAt = {{ started_at_epoch|tojson }};
+        const locationCheckRequired = {{ location_check_required|tojson }};
+        const MAX_ACCURACY = 30;
+        const STEP_LENGTH_M = 0.75;
+        const MET_CLEANUP = 3.5;
+        const DEFAULT_WEIGHT_KG = 70;
+        const gpsPoints = [];
+        let gpsWatchId = null;
+        let wakeLock = null;
+        let motionState = 'off';
+        let sensorSeen = false;
+        let motionInitialized = false;
+
+        class StepCounter {
+            constructor() {
+                this.threshold = 1.2;
+                this.minGapMs = 280;
+                this.maxGapMs = 1000;
+                this.runNeeded = 4;
+                this.tauSmooth = 0.05;
+                this.tauGravity = 1.5;
+                this.reset();
+            }
+            reset() {
+                this.gravity = null;
+                this.smooth = 0;
+                this.armed = true;
+                this.lastStepT = -1e9;
+                this.lastT = null;
+                this.run = 0;
+                this.steps = 0;
+            }
+            push(ax, ay, az, tMs) {
+                const magnitude = Math.hypot(ax, ay, az);
+                if (this.gravity === null) this.gravity = magnitude;
+                let dt = this.lastT === null ? 0.016 : (tMs - this.lastT) / 1000;
+                this.lastT = tMs;
+                dt = Math.min(Math.max(dt, 0.001), 0.2);
+                this.gravity += (1 - Math.exp(-dt / this.tauGravity)) * (magnitude - this.gravity);
+                const dynamicMotion = magnitude - this.gravity;
+                this.smooth += (1 - Math.exp(-dt / this.tauSmooth)) * (dynamicMotion - this.smooth);
+                if (this.armed && this.smooth > this.threshold) {
+                    this.armed = false;
+                    const gap = tMs - this.lastStepT;
+                    if (gap >= this.minGapMs) {
+                        if (gap > this.maxGapMs) this.run = 0;
+                        this.lastStepT = tMs;
+                        this.run += 1;
+                        if (this.run === this.runNeeded) this.steps += this.runNeeded;
+                        else if (this.run > this.runNeeded) this.steps += 1;
+                    }
+                } else if (!this.armed && this.smooth < this.threshold * 0.4) {
+                    this.armed = true;
+                }
+            }
+        }
+        const stepCounter = new StepCounter();
+
+        function onMotion(event) {
+            const acceleration = event.accelerationIncludingGravity;
+            if (!acceleration || acceleration.x === null || acceleration.y === null || acceleration.z === null) return;
+            sensorSeen = true;
+            stepCounter.push(acceleration.x, acceleration.y, acceleration.z, event.timeStamp);
+        }
+
+        async function requestMotionPermission() {
+            if (typeof DeviceMotionEvent === 'undefined') return 'unsupported';
+            if (typeof DeviceMotionEvent.requestPermission === 'function') {
+                try { return await DeviceMotionEvent.requestPermission(); }
+                catch (_) { return 'denied'; }
+            }
+            return 'granted';
+        }
+
+        function haversine(a, b) {
+            const radians = value => value * Math.PI / 180;
+            const lat1 = radians(a.lat), lat2 = radians(b.lat);
+            const dLat = radians(b.lat - a.lat), dLon = radians(b.lon - a.lon);
+            const arc = Math.sin(dLat / 2) ** 2
+                + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
+            return 6371000 * 2 * Math.asin(Math.sqrt(Math.min(1, arc)));
+        }
+
+        function updateGpsMetrics() {
+            const accuratePoints = gpsPoints.filter(point => point.accuracy < MAX_ACCURACY);
+            const distance = accuratePoints.slice(1).reduce(
+                (total, point, index) => total + haversine(accuratePoints[index], point),
+                0
+            );
+            const hasGpsMetrics = accuratePoints.length >= 2;
+            document.getElementById('steps_val').textContent = sensorSeen
+                ? `${stepCounter.steps.toLocaleString()} 歩（端末計測）`
+                : (hasGpsMetrics ? `${Math.floor(distance / STEP_LENGTH_M).toLocaleString()} 歩（GPS推定）` : '未計測');
+            document.getElementById('distance_val').textContent = hasGpsMetrics
+                ? `${distance < 1000 ? Math.round(distance) + ' m' : (distance / 1000).toFixed(2) + ' km'}`
+                : '未計測';
+            const elapsed = Math.max(0, (Date.now() - startedAt) / 1000);
+            document.getElementById('calories_val').textContent = hasGpsMetrics
+                ? `${Math.round(MET_CLEANUP * DEFAULT_WEIGHT_KG * elapsed / 3600)} kcal（概算）`
+                : '未計測';
+        }
+
+        const updateElapsedTime = () => {
+            const seconds = Math.floor((Date.now() - startedAt) / 1000);
+            let hrs = Math.floor(seconds / 3600).toString().padStart(2, '0');
+            let mins = Math.floor((seconds % 3600) / 60).toString().padStart(2, '0');
+            let secs = (seconds % 60).toString().padStart(2, '0');
+            const timerEl = document.getElementById('timer_val');
+            if (timerEl) timerEl.innerText = `${hrs}:${mins}:${secs}`;
+
+            const durationInput = document.getElementById('duration_input');
+            if (durationInput) durationInput.value = String(seconds);
+            updateGpsMetrics();
+        };
+        updateElapsedTime();
+        window.setInterval(updateElapsedTime, 1000);
+
+        document.getElementById('gps_toggle').addEventListener('click', async event => {
+            const button = event.currentTarget;
+            const status = document.getElementById('gps_status');
+            if (gpsWatchId !== null) {
+                navigator.geolocation.clearWatch(gpsWatchId);
+                gpsWatchId = null;
+                if (wakeLock) {
+                    wakeLock.release();
+                    wakeLock = null;
+                }
+                button.textContent = 'GPS計測を再開';
+                status.textContent = `GPS計測を一時停止しました（位置情報 ${gpsPoints.length} 件）。`;
+                return;
+            }
+            if (!navigator.geolocation) {
+                status.textContent = locationCheckRequired
+                    ? 'この端末ではGPS位置情報を利用できないため、このイベントを完了できません。'
+                    : 'この端末ではGPS位置情報を利用できません。GPSなしで完了できます。';
+                return;
+            }
+            status.textContent = '位置情報の許可を確認しています…';
+            const motionStatus = document.getElementById('motion_status');
+            if (!motionInitialized) {
+                stepCounter.reset();
+                sensorSeen = false;
+                motionState = await requestMotionPermission();
+                motionInitialized = true;
+                if (motionState === 'granted') {
+                    window.addEventListener('devicemotion', onMotion);
+                    motionStatus.textContent = '歩数センサーを確認中です。利用できない場合はGPSから推定します。';
+                    window.setTimeout(() => {
+                        if (!sensorSeen && gpsWatchId !== null) motionStatus.textContent = '歩数センサーのデータがないため、GPSから歩数を推定します。';
+                    }, 3000);
+                } else {
+                    motionStatus.textContent = motionState === 'denied'
+                        ? '歩数センサーが許可されていないため、GPSから歩数を推定します。'
+                        : '歩数センサー非対応のため、GPSから歩数を推定します。';
+                }
+            } else if (motionState === 'granted') {
+                window.addEventListener('devicemotion', onMotion);
+            }
+            gpsWatchId = navigator.geolocation.watchPosition(position => {
+                if (gpsPoints.length >= 5000) {
+                    navigator.geolocation.clearWatch(gpsWatchId);
+                    gpsWatchId = null;
+                    button.textContent = 'GPS計測を再開';
+                    status.textContent = 'GPS記録の上限に達したため計測を停止しました。';
+                    return;
+                }
+                gpsPoints.push({
+                    lat: position.coords.latitude,
+                    lon: position.coords.longitude,
+                    accuracy: position.coords.accuracy,
+                    ts: position.timestamp
+                });
+                status.textContent = `GPS計測中（位置情報 ${gpsPoints.length} 件、精度 ${Math.round(position.coords.accuracy)} m）`;
+                updateGpsMetrics();
+            }, error => {
+                status.textContent = locationCheckRequired
+                    ? `GPSを取得できません（${error.message}）。位置情報を許可してください。`
+                    : `GPSを取得できません（${error.message}）。GPSなしでも完了できます。`;
+            }, { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 });
+            button.textContent = 'GPS計測を停止';
+            navigator.wakeLock?.request('screen')
+                .then(lock => { wakeLock = lock; })
+                .catch(() => {});
+        });
+
+        function handleLiveSubmit(e) {
+            updateElapsedTime();
+            if (gpsWatchId !== null) {
+                navigator.geolocation.clearWatch(gpsWatchId);
+                gpsWatchId = null;
+            }
+            if (wakeLock) wakeLock.release();
+            document.getElementById('gps_points_input').value = JSON.stringify(gpsPoints);
+            document.getElementById('device_steps_input').value = sensorSeen ? String(stepCounter.steps) : '';
+            window.removeEventListener('devicemotion', onMotion);
+            const btn = document.getElementById('submit_btn');
+            if (btn) {
+                btn.innerText = "⏳ データを安全に送信中...";
+                btn.style.opacity = "0.7";
+                btn.disabled = true;
+            }
+            return true;
+        }
+    </script>
+
+</body>
+</html>

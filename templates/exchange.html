@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CleanStep - 特典交換</title>
+    <style>
+        /* 🌿 🟣 CleanStep ブランド統一デザイン（行政の信頼感×若者の軽快さ）の完全維持 */
+        body { font-family: 'Helvetica Neue', Arial, sans-serif; margin: 0; padding: 0; background-color: #f4f7f6; color: #333; text-align: center; }
+        .header { background: linear-gradient(135deg, #3498db, #2980b9); color: white; padding: 20px; font-size: 20px; font-weight: bold; position: relative; }
+        .back-btn { position: absolute; left: 62px; top: 18px; color: white; text-decoration: none; font-size: 14px; background: rgba(255,255,255,0.2); padding: 6px 12px; border-radius: 20px; }
+        
+        .container { max-width: 600px; margin: 20px auto; padding: 0 15px; box-sizing: border-box; }
+        
+        /* 現在の保有ポイント表示カード */
+        .points-display-card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.04); margin-bottom: 25px; text-align: left; display: flex; justify-content: space-between; align-items: center; }
+        .points-label { font-size: 14px; color: #7f8c8d; font-weight: bold; }
+        .points-amount { font-size: 24px; font-weight: bold; color: #2ecc71; transition: color 0.4s ease-out; }
+        
+        /* 特典アイテムカード（白背景・浮き上がりの再現） */
+        .reward-card { background: white; padding: 20px; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.06); margin-bottom: 20px; text-align: left; display: flex; justify-content: space-between; align-items: center; }
+        .reward-info { flex: 1; padding-right: 15px; }
+        .reward-title { font-size: 18px; font-weight: bold; color: #2c3e50; margin: 0 0 5px 0; }
+        .reward-desc { font-size: 13px; color: #7f8c8d; margin: 0 0 10px 0; line-height: 1.4; }
+        .reward-cost { display: inline-block; background: #e8f8f5; color: #2ecc71; font-weight: bold; padding: 4px 10px; border-radius: 6px; font-size: 13px; }
+        
+        /* 🚀 交換アクションボタン（青: #3498db 基調） */
+        .exchange-btn { background: #3498db; color: white; border: none; padding: 12px 24px; border-radius: 25px; font-size: 14px; font-weight: bold; cursor: pointer; box-shadow: 0 4px 10px rgba(52,152,219,0.2); transition: all 0.2s; }
+        .exchange-btn:hover { background: #2980b9; transform: translateY(-1px); }
+        
+        .exchanged-badge { background: #e5e8e8; color: #7f8c8d; padding: 12px 24px; border-radius: 25px; font-size: 14px; font-weight: bold; cursor: not-allowed; text-align: center; }
+        
+        /* エラー・成功メッセージ通知 */
+        .alert-msg { padding: 12px; border-radius: 8px; font-size: 14px; margin-bottom: 20px; text-align: left; display: block; }
+        .alert-error { background: #fce4d6; color: #e74c3c; border-left: 4px solid #e74c3c; }
+        .alert-success { background: #e8f8f5; color: #117a65; border-left: 4px solid #2ecc71; }
+        .demo-notice { margin: 8px 0 12px; color: #854d0e; background: #fef9c3; border: 1px solid #fde68a; border-radius: 8px; padding: 9px 11px; font-size: 12px; line-height: 1.5; }
+        .history-section { background: white; padding: 18px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.04); text-align: left; }
+        .history-section h2 { margin: 0 0 10px; font-size: 16px; color: #2c3e50; }
+        .history-item { padding: 10px 0; border-bottom: 1px solid #f2f4f4; display: flex; justify-content: space-between; gap: 12px; font-size: 13px; }
+        .history-item:last-child { border-bottom: 0; }
+        .history-cost { color: #257a52; font-weight: bold; white-space: nowrap; }
+        @media (max-width: 480px) {
+            .reward-card { align-items: stretch; flex-direction: column; gap: 12px; padding: 16px; }
+            .reward-info { padding-right: 0; }
+            .reward-card form, .exchange-btn, .exchanged-badge { width: 100%; box-sizing: border-box; }
+            .points-display-card { gap: 12px; flex-wrap: wrap; }
+            .points-amount { font-size: 21px; }
+        }
+    </style>
+</head>
+<body>
+    {% include "_user_navigation.html" %}
+
+    <div class="header">
+        <a href="{{ url_for('home') }}" class="back-btn">← メニューに戻る</a>
+        <a href="{{ url_for('home') }}" style="color:white; text-decoration:none;">🎁 特典交換カウンター</a>
+    </div>
+
+    <div class="container">
+        
+        <!-- 各種通知メッセージの表示領域 -->
+        {% if error_msg %}
+            <div class="alert-msg alert-error">⚠️ {{ error_msg }}</div>
+        {% endif %}
+        {% if success_msg %}
+            <div class="alert-msg alert-success">🎉 {{ success_msg }}</div>
+        {% endif %}
+
+        <!-- 現在のポイント残高 -->
+        <div class="points-display-card">
+            <span class="points-label">🪙 利用可能ポイント</span>
+            <span class="points-amount" id="current_balance">{{ user['total_points'] }} pt</span>
+        </div>
+
+        <div class="reward-list">
+            {% for reward in rewards %}
+                <div class="reward-card">
+                    <div class="reward-info">
+                        <div class="reward-title">
+                            {% if reward.category == 'digital_demo' %}🎟️{% elif reward.category == 'donation' %}🌳{% elif reward.id == 'coffee' %}☕{% else %}🛍️{% endif %}
+                            {{ reward.name }}
+                        </div>
+                        <p class="reward-desc">{{ reward.description }}</p>
+                        <div class="reward-cost">必要ポイント: {{ reward.cost }} pt</div>
+                        {% if reward.category == 'digital_demo' %}
+                            <div class="demo-notice" role="note">
+                                デモ専用です。交換するとポイントを消費して履歴に記録しますが、実際のギフト発券・決済・外部サービス連携は行われません。
+                            </div>
+                        {% endif %}
+                    </div>
+
+                    {% if reward.id in exchanged_items %}
+                        <div class="exchanged-badge">✓ 交換済み</div>
+                    {% else %}
+                        <form action="{{ url_for('exchange_confirm') }}" method="POST">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                            <input type="hidden" name="item_id" value="{{ reward.id }}">
+                            <button type="submit" class="exchange-btn">交換内容を確認</button>
+                        </form>
+                    {% endif %}
+                </div>
+            {% endfor %}
+        </div>
+
+        <section class="history-section" aria-labelledby="exchange-history-title">
+            <h2 id="exchange-history-title">最近の交換履歴</h2>
+            {% if history %}
+                {% for item in history %}
+                    <div class="history-item">
+                        <span>{{ item['item_name'] }}<br><small>{{ item['created_at'] }}</small></span>
+                        <span class="history-cost">-{{ item['cost'] }} pt</span>
+                    </div>
+                {% endfor %}
+            {% else %}
+                <p class="reward-desc">交換履歴はまだありません。</p>
+            {% endif %}
+        </section>
+
+    </div>
+
+</body>
+</html>

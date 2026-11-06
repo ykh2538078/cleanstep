@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>CleanStep - QRスキャン</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-950 min-h-screen text-white flex items-center justify-center p-4">
+    <div class="max-w-sm w-full space-y-6 relative">
+        
+        <!-- ヘッダーエリア -->
+        <div class="text-center">
+            <span class="inline-block bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[10px] font-bold tracking-widest px-2.5 py-0.5 rounded-full">
+                📸 QR SCANNER
+            </span>
+            <h2 class="text-lg font-black text-slate-100 mt-2">QRコードスキャンカメラ</h2>
+            <p class="text-xs text-slate-400 mt-1 leading-relaxed">
+                エコごみ箱に貼り付けられている<br>
+                <span class="text-emerald-400 font-bold">「CleanStep専用QRコード」</span>をカメラにかざしてください
+            </p>
+        </div>
+
+        <!-- カメラファインダー風 UI（シミュレーター） -->
+        <div class="relative aspect-square w-full bg-slate-900 rounded-3xl overflow-hidden border border-white/10 flex flex-col items-center justify-center shadow-2xl">
+            
+            <!-- カメラ映像の代わりとなる背景グラフィック -->
+            <div class="absolute inset-0 bg-gradient-to-b from-slate-900/40 via-emerald-950/20 to-slate-900/60 flex items-center justify-center">
+                <!-- 疑似的なQRコードターゲットマーク -->
+                <div class="w-48 h-48 border-2 border-emerald-400/40 rounded-2xl relative flex items-center justify-center">
+                    <!-- 四角のコーナーエフェクト -->
+                    <div class="absolute -top-1 -left-1 w-6 h-6 border-t-4 border-l-4 border-emerald-400 rounded-tl-md"></div>
+                    <div class="absolute -top-1 -right-1 w-6 h-6 border-t-4 border-r-4 border-emerald-400 rounded-tr-md"></div>
+                    <div class="absolute -bottom-1 -left-1 w-6 h-6 border-b-4 border-l-4 border-emerald-400 rounded-bl-md"></div>
+                    <div class="absolute -bottom-1 -right-1 w-6 h-6 border-b-4 border-r-4 border-emerald-400 rounded-br-md"></div>
+                    
+                    <!-- レーザースキャン線（アニメーション） -->
+                    <div class="w-full h-0.5 bg-emerald-400 absolute top-1/2 left-0 shadow-[0_0_8px_#34d399] animate-bounce"></div>
+                    
+                    <!-- 読み取り中アイコン -->
+                    <span class="text-xs font-mono text-emerald-400/80 tracking-widest font-bold">SCANNING...</span>
+                </div>
+            </div>
+
+            <!-- カメラ許可の注意書き（オーバーレイ表示） -->
+            <div class="absolute bottom-4 left-4 right-4 bg-black/60 backdrop-blur-md rounded-xl p-3 text-center border border-white/5">
+                <p class="text-[10px] text-slate-300">
+                    ※カメラのアクセス許可を求められた場合は「許可」を押してください。
+                </p>
+            </div>
+        </div>
+
+        <!-- アクションボタン（PoC検証用：タップで2段階目の写真撮影へ進む想定） -->
+        <div class="space-y-3 pt-2">
+            <button onclick="simulateScan()" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-4 rounded-xl transition text-sm shadow-lg shadow-emerald-900/20 tracking-wide">
+                QRコードの読み取りに成功（デモ操作）
+            </button>
+            
+            <a href="/" class="block w-full bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 font-bold py-3.5 rounded-xl transition text-center text-xs tracking-wide">
+                メニューに戻る
+            </a>
+        </div>
+    </div>
+
+    <!-- デモ用スクリプト：タップ後にフェーズ2構想の「写真撮影ステップ」への移行を模倣 -->
+    <script>
+        function simulateScan() {
+            alert("QRコードを認識しました！\n【ステップ2：写真の撮影】\n不正防止のため、続けて投棄するごみの写真を撮影してください。");
+            // 実際の実装時は、ここで画像アップロードフォームやカメラ撮影ルーティングへ遷移させます
+            // window.location.href = '/trash-bin/capture'; 
+        }
+    </script>
+</body>
+</html>
