@@ -4500,7 +4500,7 @@ if __name__ == '__main__':
     app.run(host=host, debug=debug_mode, port=5005)
 
 def generate_qr():
-    public_url = "http://cleanstep.duckdns.org:5000"
+    public_url = "https://cleanstep.duckdns.org"
 
     print("\n" + "=" * 60)
     print("📱 PUBLIC URL")
