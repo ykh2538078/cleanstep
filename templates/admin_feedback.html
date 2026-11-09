@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>アンケート・感想 | CleanStep 管理者</title>
+    <style>
+        :root { --green:#2b8a3e; --bg:#f8f9fa; --border:#dee2e6; --muted:#6c757d; --text:#212529; }
+        * { box-sizing:border-box; }
+        body { margin:0; background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif; }
+        main { max-width:1100px; margin:0 auto; padding:28px 20px; }
+        h1 { margin:0 0 8px; font-size:1.65rem; }
+        .lead,.muted { color:var(--muted); line-height:1.6; }
+        .card { margin:20px 0; padding:22px; border:1px solid var(--border); border-radius:10px; background:white; box-shadow:0 2px 4px #00000008; }
+        .stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:12px; margin-top:18px; }
+        .stat { padding:16px; border:1px solid var(--border); border-radius:8px; }
+        .stat strong { display:block; color:var(--green); font-size:1.5rem; }
+        .stat span { color:var(--muted); font-size:.9rem; }
+        .table-wrap { overflow-x:auto; }
+        table { width:100%; border-collapse:collapse; min-width:650px; }
+        th,td { padding:12px 10px; border-bottom:1px solid var(--border); text-align:left; vertical-align:top; }
+        th { color:var(--muted); font-size:.88rem; }
+        .comment { padding:14px 0; border-bottom:1px solid var(--border); }
+        .comment:last-child { border-bottom:0; }
+        .comment p { margin:8px 0 0; line-height:1.7; white-space:pre-wrap; overflow-wrap:anywhere; }
+        .empty { padding:18px 0; color:var(--muted); }
+        @media(max-width:600px) { main { padding:20px 12px; } .card { padding:16px; } h1 { font-size:1.35rem; } }
+    </style>
+</head>
+<body>
+    {% include "_admin_navigation.html" %}
+    <main>
+        <h1>アンケート・感想</h1>
+        <p class="lead">イベント後アンケートを横断して確認できます。回答者を特定する情報は表示しません。</p>
+
+        <section class="card" aria-labelledby="summary-title">
+            <h2 id="summary-title">全体の集計</h2>
+            <div class="stats">
+                <div class="stat"><strong>{{ summary.responses or 0 }}</strong><span>回答数</span></div>
+                <div class="stat"><strong>{% if summary.average_satisfaction is not none %}{{ summary.average_satisfaction }} / 5{% else %}—{% endif %}</strong><span>平均満足度</span></div>
+                <div class="stat"><strong>{{ summary.yes_count or 0 }}</strong><span>次回も参加したい</span></div>
+                <div class="stat"><strong>{{ summary.maybe_count or 0 }}</strong><span>日時・内容によって参加</span></div>
+                <div class="stat"><strong>{{ summary.no_count or 0 }}</strong><span>次回参加は難しい</span></div>
+                <div class="stat"><strong>{{ summary.comment_count or 0 }}</strong><span>自由記述</span></div>
+            </div>
+        </section>
+
+        <section class="card" aria-labelledby="events-title">
+            <h2 id="events-title">イベント別の集計</h2>
+            {% if events %}
+                <div class="table-wrap"><table>
+                    <thead><tr><th>イベント</th><th>開催日</th><th>回答数</th><th>平均満足度</th><th>次回参加したい</th></tr></thead>
+                    <tbody>{% for event in events %}
+                        <tr>
+                            <td>{{ event.name }}<br><span class="muted">{{ event.location }}</span></td>
+                            <td>{{ event.datetime }}</td>
+                            <td>{{ event.responses }}</td>
+                            <td>{% if event.average_satisfaction is not none %}{{ event.average_satisfaction }} / 5{% else %}—{% endif %}</td>
+                            <td>{{ event.yes_count or 0 }} 人</td>
+                        </tr>
+                    {% endfor %}</tbody>
+                </table></div>
+            {% else %}<p class="empty">アンケート回答はまだありません。</p>{% endif %}
+        </section>
+
+        <section class="card" aria-labelledby="comments-title">
+            <h2 id="comments-title">最近の自由記述</h2>
+            {% if comments %}
+                {% for comment in comments %}
+                    <article class="comment">
+                        <strong>{{ comment.event_name }}</strong>
+                        <span class="muted"> · 満足度 {{ comment.satisfaction }} / 5 · {{ comment.submitted_at }}</span>
+                        <p>{{ comment.comment }}</p>
+                    </article>
+                {% endfor %}
+            {% else %}<p class="empty">自由記述の回答はまだありません。</p>{% endif %}
+        </section>
+    </main>
+</body>
+</html>

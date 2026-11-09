@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>ログアウト確認 | CleanStep</title>
+    <style>
+        body { display: grid; min-height: 100vh; place-items: center; margin: 0; background: #f4f7f6; color: #263238; font-family: "Yu Gothic", Meiryo, sans-serif; }
+        main { width: min(420px, calc(100% - 32px)); padding: 28px; background: #fff; border: 1px solid #dce5e1; border-radius: 12px; text-align: center; box-sizing: border-box; }
+        .actions { display: flex; justify-content: center; gap: 12px; margin-top: 22px; }
+        button, a { padding: 11px 16px; border: 0; border-radius: 7px; font: inherit; font-weight: 700; text-decoration: none; cursor: pointer; }
+        button { background: #c0392b; color: #fff; }
+        a { background: #e8efeb; color: #17633f; }
+    </style>
+</head>
+<body>
+    <main>
+        <h1>ログアウトしますか？</h1>
+        <p>ログアウトしてログイン画面に戻ります。</p>
+        <div class="actions">
+            <form method="POST" action="{{ url_for('logout') }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button type="submit">ログアウト</button>
+            </form>
+            <a href="{{ url_for('home') if session.get('role') == 'user' else url_for('admin_dashboard') }}">キャンセル</a>
+        </div>
+    </main>
+</body>
+</html>

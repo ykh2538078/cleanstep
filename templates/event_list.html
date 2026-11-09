@@ -1,0 +1,60 @@
+{% from "_event_location_map.html" import event_map_link %}
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ title }} | CleanStep</title>
+    <style>
+        body { margin: 0; background: #f4f7f6; color: #263238; font-family: "Yu Gothic", Meiryo, sans-serif; }
+        main { max-width: 900px; margin: 24px auto; padding: 0 16px 30px; }
+        h1 { margin: 20px 0; }
+        article { display: flex; justify-content: space-between; gap: 18px; align-items: center; margin: 12px 0; padding: 18px; background: #fff; border: 1px solid #dce5e1; border-radius: 10px; }
+        article h2 { margin: 0 0 8px; font-size: 1.1rem; }
+        .meta { color: #596a63; font-size: .9rem; }
+        .capacity { margin-top: 7px; color: #257a52; font-size: .9rem; font-weight: 700; }
+        .capacity.full { color: #a32626; }
+        .action { flex: 0 0 auto; padding: 10px 14px; border-radius: 7px; background: #257a52; color: #fff; text-decoration: none; font-weight: 700; }
+        .empty { padding: 24px; background: #fff; border-radius: 10px; color: #596a63; }
+        @media (max-width: 560px) { article { align-items: stretch; flex-direction: column; } .action { text-align: center; } }
+    </style>
+</head>
+<body>
+    {% include "_user_navigation.html" %}
+    <main>
+        <h1><a href="{{ url_for('home') }}" style="color:inherit; text-decoration:none;">{{ title }}</a></h1>
+        {% for event in events %}
+            <article>
+                <div>
+                    <h2>{{ event.name }}</h2>
+                    <div class="meta">📍 {{ event.location }} · 🕒 {{ event.datetime|replace('-', '/') }}</div>
+                    {{ event_map_link(event) }}
+                    <p class="capacity {% if event.reserved_count >= event.capacity %}full{% endif %}">
+                        {% if event.reserved_count >= event.capacity %}
+                            定員に達しました（{{ event.capacity }}人）
+                        {% else %}
+                            残り {{ event.capacity - event.reserved_count }} / {{ event.capacity }} 人
+                        {% endif %}
+                    </p>
+                    <p class="meta">参加ボーナス +{{ event.bonus_points }} pt</p>
+                </div>
+                {% if event.id in joined_events %}
+                    <span class="action" style="background:#64748b;">参加済み</span>
+                {% elif is_reservation_list %}
+                    {% if event.datetime|event_started %}
+                        <a class="action" href="{{ url_for('event_live', event_id=event.id) }}">計測を開始</a>
+                    {% else %}
+                        <a class="action" href="{{ url_for('event_reserve', event_id=event.id) }}">開催前・予約内容</a>
+                    {% endif %}
+                {% elif event.id in reserved_events %}
+                    <a class="action" href="{{ url_for('event_reserve', event_id=event.id) }}">予約内容</a>
+                {% else %}
+                    <a class="action" href="{{ url_for('event_reserve', event_id=event.id) }}">詳細・予約</a>
+                {% endif %}
+            </article>
+        {% else %}
+            <p class="empty">{% if is_reservation_list %}予約中のイベントはありません。{% else %}1年以内に開催予定のイベントはありません。{% endif %}</p>
+        {% endfor %}
+    </main>
+</body>
+</html>

@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CleanStep - 管理者ダッシュボード</title>
+
+    <style>
+        :root {
+            --primary-green: #2b8a3e;
+            --bg-gray: #f8f9fa;
+            --border-gray: #dee2e6;
+            --text-dark: #212529;
+            --text-muted: #6c757d;
+            --danger-red: #c0392b;
+            --info-blue: #2980b9;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: var(--bg-gray);
+            color: var(--text-dark);
+            margin: 0;
+            padding: 0;
+        }
+
+        nav {
+            background: #ffffff;
+            border-bottom: 1px solid var(--border-gray);
+            padding: 14px 160px 14px 20px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+        }
+
+        nav a {
+            text-decoration: none;
+            color: var(--text-muted);
+            font-weight: 700;
+        }
+
+        .container {
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 30px 20px;
+        }
+
+        .card {
+            background: #ffffff;
+            border: 1px solid var(--border-gray);
+            border-radius: 10px;
+            padding: 25px;
+            margin-bottom: 25px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.04);
+            transition: transform 0.2s ease-out;
+        }
+        .card:hover {
+            transform: translateY(-3px);
+        }
+
+        .card-title {
+            font-size: 1.2rem;
+            font-weight: 800;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }
+
+        .stat-box {
+            background: #ffffff;
+            border: 1px solid var(--border-gray);
+            border-radius: 8px;
+            padding: 18px;
+            text-align: center;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.04);
+            transition: transform 0.2s ease-out;
+        }
+        .stat-box:hover {
+            transform: translateY(-3px);
+        }
+
+        .stat-number {
+            font-size: 1.6rem;
+            font-weight: 800;
+            color: var(--primary-green);
+        }
+
+        .stat-label {
+            font-size: 0.9rem;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }
+
+        .section-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }
+
+        .section-card {
+            background: #ffffff;
+            border: 1px solid var(--border-gray);
+            border-radius: 8px;
+            padding: 20px;
+            text-align: center;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.04);
+            transition: transform 0.2s ease-out;
+        }
+        .section-card:hover {
+            transform: translateY(-3px);
+        }
+
+        .section-title {
+            font-size: 1rem;
+            font-weight: 800;
+            margin-bottom: 10px;
+        }
+
+        .btn {
+            display: inline-block;
+            padding: 10px 16px;
+            border-radius: 6px;
+            font-weight: 700;
+            border: none;
+            cursor: pointer;
+            background-color: var(--primary-green);
+            color: #fff;
+            text-decoration: none;
+        }
+        .btn:hover {
+            background-color: #256f33;
+        }
+
+        @media (max-width: 600px) {
+            .container { padding: 18px 12px; }
+            .card { padding: 16px; }
+            nav > div { flex-wrap: wrap; gap: 10px; }
+            nav > div > span { order: -1; width: 100%; text-align: center; }
+        }
+    </style>
+</head>
+
+<body>
+
+    {% include "_admin_navigation.html" %}
+
+    <nav>
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+            <a href="{{ url_for('admin_dashboard') }}">CleanStep 管理者メニュー</a>
+            <span style="font-weight:800; font-size:1.2rem;">📊 ダッシュボード</span>
+            <span aria-hidden="true" style="width:70px;"></span>
+        </div>
+    </nav>
+
+    <div class="container">
+
+        <!-- 統計 -->
+        <div class="card" style="border-left:5px solid var(--primary-green);">
+            <h2 class="card-title">📈 運営状況</h2>
+
+            <div class="stats-grid">
+                <div class="stat-box">
+                    <div class="stat-number">{{ stats.users_total }}</div>
+                    <div class="stat-label">登録ユーザー総数</div>
+                </div>
+
+                <div class="stat-box">
+                    <div class="stat-number">{{ stats.ai_count }}</div>
+                    <div class="stat-label">AI判定数</div>
+                </div>
+
+                <div class="stat-box">
+                    <div class="stat-number">{{ stats.flags }}</div>
+                    <div class="stat-label">不正検知</div>
+                </div>
+
+                <div class="stat-box">
+                    <div class="stat-number">{{ stats.events_today }}</div>
+                    <div class="stat-label">イベント参加数</div>
+                </div>
+
+                <div class="stat-box">
+                    <div class="stat-number">{{ stats.organizer_applications_pending }}</div>
+                    <div class="stat-label">審査待ちの団体申請</div>
+                </div>
+
+                <div class="stat-box">
+                    <div class="stat-number">{{ stats.approved_organizations }}</div>
+                    <div class="stat-label">承認済み団体</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 特典交換状況 -->
+        <div class="card" style="border-left:5px solid var(--info-blue);">
+            <h2 class="card-title">🎁 特典交換状況</h2>
+
+            <div class="stats-grid">
+                <div class="stat-box">
+                    <div class="stat-number">{{ stats.local_rewards }}</div>
+                    <div class="stat-label">地元特典交換</div>
+                </div>
+
+                <div class="stat-box">
+                    <div class="stat-number">{{ stats.universal_rewards }}</div>
+                    <div class="stat-label">汎用ポイント交換</div>
+                </div>
+
+
+                <div class="stat-box">
+                    <div class="stat-number">{{ stats.total_rewards }}</div>
+                    <div class="stat-label">総交換数</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 管理セクション -->
+        <div class="card" style="border-left:5px solid var(--danger-red);">
+            <h2 class="card-title">🛠 管理セクション</h2>
+            <p>イベント審査待ち：<strong>{{ stats.events_pending_review }}</strong> 件</p>
+            <p><a href="{{ url_for('admin_event_reviews') }}">イベント審査キューを開く</a></p>
+            <p><a href="{{ url_for('admin_feedback') }}">アンケート・感想の集計を確認する</a></p>
+
+            <div class="section-grid">
+                <div class="section-card">
+                    <div class="section-title">ユーザー管理</div>
+                    <a href="{{ url_for('admin_users') }}" class="btn">ユーザーを確認</a>
+                </div>
+
+                <div class="section-card">
+                    <div class="section-title">AI判定ログ</div>
+                    <a href="{{ url_for('admin_ai_logs') }}" class="btn">判定ログを見る</a>
+                </div>
+
+                <div class="section-card">
+                    <div class="section-title">活動データ確認</div>
+                    <a href="{{ url_for('admin_activity_verifications') }}" class="btn">確認状態を管理</a>
+                </div>
+
+                <div class="section-card">
+                    <div class="section-title">不正検知ログ</div>
+                    <a href="{{ url_for('admin_ai_flags') }}" class="btn">要確認ログを見る</a>
+                </div>
+
+                <div class="section-card">
+                    <div class="section-title">特典管理</div>
+                    <a href="{{ url_for('admin_rewards') }}" class="btn">特典を編集</a>
+                </div>
+
+                <div class="section-card">
+                    <div class="section-title">ごみ箱設置場所</div>
+                    <a href="{{ url_for('admin_bins') }}" class="btn">設置場所を確認・編集</a>
+                </div>
+
+                <div class="section-card">
+                    <div class="section-title">イベント管理</div>
+                    <a href="{{ url_for('admin_events') }}" class="btn">イベントを確認・編集</a>
+                </div>
+
+                <div class="section-card">
+                    <div class="section-title">活動実績レポート</div>
+                    <a href="{{ url_for('admin_activity_report') }}" class="btn">レポートを見る</a>
+                </div>
+
+                <div class="section-card">
+                    <div class="section-title">主催者申請</div>
+                    <a href="{{ url_for('admin_organizer_applications') }}" class="btn">申請を審査</a>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+</body>
+</html>

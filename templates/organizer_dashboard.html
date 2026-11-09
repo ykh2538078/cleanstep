@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>団体ダッシュボード | CleanStep</title>
+    <style>
+        :root {
+            --primary-green: #2b8a3e;
+            --bg-gray: #f8f9fa;
+            --border-gray: #dee2e6;
+            --text-dark: #212529;
+            --text-muted: #6c757d;
+            --danger-red: #c0392b;
+        }
+        body {
+            margin: 0;
+            background: var(--bg-gray);
+            color: var(--text-dark);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+        }
+        nav {
+            padding: 14px 76px;
+            border-bottom: 1px solid var(--border-gray);
+            background: #fff;
+            box-shadow: 0 1px 3px rgba(0,0,0,.04);
+        }
+        .nav-inner {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            max-width: 1100px;
+            margin: 0 auto;
+        }
+        nav a { color: var(--text-muted); font-weight: 700; text-decoration: none; }
+        .nav-title { color: var(--text-dark); font-size: 1.2rem; font-weight: 800; }
+        .container { max-width: 1100px; margin: 0 auto; padding: 30px 20px; }
+        .card {
+            padding: 25px;
+            margin-bottom: 25px;
+            border: 1px solid var(--border-gray);
+            border-radius: 10px;
+            background: #fff;
+            box-shadow: 0 2px 4px rgba(0,0,0,.04);
+        }
+        .card-title { display: flex; align-items: center; gap: 6px; margin: 0 0 10px; font-size: 1.2rem; font-weight: 800; }
+        .section-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-top: 20px; }
+        .summary-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 18px; }
+        .summary-stat { padding: 16px; border: 1px solid var(--border-gray); border-radius: 8px; background: #fff; }
+        .summary-stat strong { display: block; color: var(--primary-green); font-size: 1.55rem; }
+        .summary-stat span { color: var(--text-muted); font-size: .9rem; }
+        .feedback-list { display: grid; gap: 12px; margin-top: 16px; }
+        .feedback-row { padding: 16px; border: 1px solid var(--border-gray); border-radius: 8px; background: #fff; }
+        .feedback-meta { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 14px; color: var(--text-muted); font-size: .88rem; }
+        .feedback-comment { margin: 12px 0; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+        .empty-state { margin: 14px 0 0; color: var(--text-muted); }
+        .section-card {
+            padding: 20px;
+            border: 1px solid var(--border-gray);
+            border-radius: 8px;
+            background: #fff;
+            text-align: center;
+            box-shadow: 0 2px 4px rgba(0,0,0,.04);
+            transition: transform .2s ease-out;
+        }
+        .section-card:hover { transform: translateY(-3px); }
+        .section-title { margin-bottom: 10px; font-size: 1rem; font-weight: 800; }
+        .section-card p { min-height: 3.2em; color: var(--text-muted); line-height: 1.6; }
+        .count { margin: 14px 0; color: var(--primary-green); font-size: 1.5rem; font-weight: 800; }
+        .btn { display: inline-block; padding: 10px 16px; border: 0; border-radius: 6px; background: var(--primary-green); color: #fff; font-weight: 700; text-decoration: none; }
+        .btn:hover { background: #256f33; }
+        @media (max-width: 760px) {
+            .section-grid { grid-template-columns: 1fr; }
+            .summary-grid { grid-template-columns: 1fr; }
+            .section-card p { min-height: 0; }
+            nav { padding-right: 64px; padding-left: 64px; }
+            .nav-title { font-size: 1rem; }
+        }
+    </style>
+</head>
+<body>
+    {% include "_organizer_navigation.html" %}
+    <nav>
+        <div class="nav-inner">
+            <a href="{{ url_for('organizer_dashboard') }}">CleanStep 団体メニュー</a>
+            <span class="nav-title">団体ダッシュボード</span>
+            <span aria-hidden="true" style="width: 70px;"></span>
+        </div>
+    </nav>
+    <div class="container">
+        <section class="card" style="border-left:5px solid var(--primary-green);">
+            <h1 class="card-title">団体向け機能</h1>
+            <p>イベントの申請、開催状況の管理、申請済みイベントの編集を行えます。</p>
+            <div class="summary-grid" aria-label="団体の活動状況">
+                <div class="summary-stat"><strong>{{ event_count }}</strong><span>登録イベント</span></div>
+                <div class="summary-stat"><strong>{{ active_reservations }}</strong><span>受付中の予約</span></div>
+                <div class="summary-stat"><strong>{{ participant_count }}</strong><span>参加完了記録</span></div>
+            </div>
+        </section>
+        <section class="card" aria-labelledby="feedback-heading">
+            <h2 class="card-title" id="feedback-heading">確認が必要な感想 <span class="count">{{ pending_feedback_count }} 件</span></h2>
+            <p>参加者のアンケートを確認し、対応状況や次回に向けたメモを登録できます。回答者名は表示されません。</p>
+            {% if recent_feedback %}
+                <div class="feedback-list">
+                    {% for feedback in recent_feedback %}
+                        <article class="feedback-row">
+                            <div class="feedback-meta">
+                                <strong>{{ feedback.event_name }}</strong>
+                                <span>満足度 {{ feedback.satisfaction }} / 5 ・ {{ feedback.submitted_at }}</span>
+                            </div>
+                            <p class="feedback-comment">{{ feedback.comment or '自由記述はありません。アンケートの集計を確認してください。' }}</p>
+                            <a class="btn" href="{{ url_for('organizer_event_participants', event_id=feedback.event_id) }}">このイベントの感想を見る</a>
+                        </article>
+                    {% endfor %}
+                </div>
+            {% else %}
+                <p class="empty-state">未確認の感想はありません。回答が届くとここに表示されます。</p>
+            {% endif %}
+        </section>
+        <section class="card" style="border-left:5px solid var(--danger-red);" aria-label="団体向け機能">
+            <h2 class="card-title">イベント管理セクション</h2>
+            <div class="section-grid">
+            <article class="section-card">
+                <div class="section-title">イベント申請</div>
+                <p>開催する清掃イベントの内容を入力し、審査を申請します。</p>
+                <a class="btn" href="{{ url_for('organizer_event_new') }}">イベントを申請</a>
+            </article>
+            <article class="section-card">
+                <div class="section-title">イベント管理</div>
+                <p>イベントのカレンダー、予約状況、参加実績を確認します。</p>
+                <div class="count">{{ event_count }} 件</div>
+                <a class="btn" href="{{ url_for('organizer_events') }}">イベントを管理</a>
+            </article>
+            <article class="section-card">
+                <div class="section-title">イベント編集</div>
+                <p>予約・参加記録がないイベントの内容を編集できます。</p>
+                <div class="count">{{ editable_event_count }} 件</div>
+                <a class="btn" href="{{ url_for('organizer_event_edit_list') }}">編集するイベントを選択</a>
+            </article>
+            </div>
+        </section>
+    </div>
+</body>
+</html>

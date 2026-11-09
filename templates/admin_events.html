@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CleanStep - イベント管理</title>
+
+    <style>
+        :root {
+            --primary-green: #2b8a3e;
+            --primary-light: #f4fbf6;
+            --bg-gray: #f8f9fa;
+            --border-gray: #dee2e6;
+            --text-dark: #212529;
+            --text-muted: #6c757d;
+            --danger-red: #c0392b;
+            --info-blue: #2980b9;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: var(--bg-gray);
+            color: var(--text-dark);
+            margin: 0;
+            padding: 0;
+        }
+
+        nav {
+            background: #ffffff;
+            border-bottom: 1px solid var(--border-gray);
+            padding: 14px 20px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+        }
+
+        nav a {
+            text-decoration: none;
+            color: var(--text-muted);
+            font-weight: 700;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 30px 20px;
+        }
+
+        /* 🌱 カードの浮き上がり */
+        .hover-card {
+            background: #ffffff;
+            border: 1px solid var(--border-gray);
+            border-radius: 8px;
+            padding: 19px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.04);
+            transition: transform 0.2s ease-out, box-shadow 0.2s ease-out, background-color 0.2s ease-out;
+            overflow-x: auto;
+        }
+        .hover-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 6px 12px rgba(0,0,0,0.08);
+            background-color: #fafdfb;
+        }
+        .hover-card:hover .card-icon {
+            transform: translateY(-2px);
+        }
+        .card-icon {
+            transition: transform 0.2s ease-out;
+        }
+
+        /* 🌱 テーブル */
+        table {
+            width: 100%;
+            min-width: 760px;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }
+        th, td {
+            padding: 12px;
+            border-bottom: 1px solid var(--border-gray);
+            text-align: left;
+        }
+        th {
+            background-color: #ffffff;
+            font-weight: 700;
+            color: var(--text-dark);
+        }
+        td {
+            background-color: #ffffff;
+            font-size: 0.9rem;
+        }
+
+        .muted {
+            color: var(--text-muted);
+        }
+
+        .map-warning {
+            margin: 16px 0;
+            padding: 12px 14px;
+            border: 1px solid #f0d58a;
+            border-radius: 6px;
+            background: #fff8e1;
+            color: #6b4f00;
+        }
+
+        .map-missing {
+            display: block;
+            margin-top: 4px;
+            color: #9a6700;
+            font-size: 0.8rem;
+            font-weight: 700;
+        }
+
+        /* 🌱 操作ボタン */
+        .btn-add {
+            background-color: var(--primary-green);
+            color: #fff;
+            padding: 10px 16px;
+            border-radius: 6px;
+            border: none;
+            font-weight: 700;
+            cursor: pointer;
+            margin-bottom: 15px;
+        }
+        .btn-add:hover {
+            background-color: #256f33;
+        }
+
+        .btn-edit {
+            background-color: var(--info-blue);
+            color: #fff;
+            padding: 6px 12px;
+            border-radius: 6px;
+            border: none;
+            font-weight: 700;
+            cursor: pointer;
+        }
+        .btn-edit:hover {
+            background-color: #1f6a8a;
+        }
+
+        .btn-delete {
+            background-color: var(--danger-red);
+            color: #fff;
+            padding: 6px 12px;
+            border-radius: 6px;
+            border: none;
+            font-weight: 700;
+            cursor: pointer;
+        }
+        .btn-delete:hover {
+            background-color: #a93226;
+        }
+
+        @media (max-width: 600px) {
+            .container { padding: 18px 12px; }
+            nav > div { flex-wrap: wrap; gap: 10px; }
+            nav > div > span { order: -1; width: 100%; text-align: center; }
+        }
+    </style>
+</head>
+
+<body>
+
+    <!-- 🌱 ナビバー -->
+    <nav>
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+            <a href="{{ url_for('admin_dashboard') }}">← 管理メニューに戻る</a>
+            <span style="font-weight:800; font-size:1.2rem;">🎉 イベント管理</span>
+            <a href="{{ url_for('logout') }}" style="color:var(--primary-green); font-weight:700;">ログアウト</a>
+        </div>
+    </nav>
+
+    <div class="container">
+
+        <!-- 🌱 イベント一覧カード -->
+        <div class="hover-card" style="border-left:5px solid var(--primary-green);">
+            <h2 style="font-size:1.3rem; font-weight:800; margin:0;">
+                <span class="card-icon">📅</span> イベント一覧
+            </h2>
+            <p class="muted" style="margin-top:6px;">
+                地域イベントと参加完了者を確認できます。主催者申請は審査画面から確認してください。
+            </p>
+
+            {% if missing_map_count %}
+            <p class="map-warning" role="status">
+                地図のピンが未設定のイベントが {{ missing_map_count }} 件あります。
+                参加者に正確な集合場所を案内できるよう、対象イベントの「位置を設定」から地図上のピンを登録してください。
+            </p>
+            {% endif %}
+
+            <a href="{{ url_for('admin_organizer_applications') }}" class="btn-add" style="display:inline-block; text-decoration:none;">主催者申請を審査</a>
+            <a href="{{ url_for('admin_event_reviews') }}" class="btn-add" style="display:inline-block; text-decoration:none;">イベント審査キュー</a>
+            <a href="{{ url_for('admin_event_add') }}" class="btn-add" style="display:inline-block; text-decoration:none;">＋ イベントを追加</a>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>イベント名</th>
+                        <th>開催日</th>
+                        <th>場所</th>
+                        <th>ジャンル</th>
+                        <th>主催者</th>
+                        <th>予約数</th>
+                        <th>参加者数</th>
+                        <th>開催状態</th>
+                        <th>審査状態</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {% for event in events %}
+                    <tr>
+                        <td>{{ event.name }}</td>
+                        <td>{{ event.date }}</td>
+                        <td>
+                            {{ event.location }}
+                            {% if event.latitude is none or event.longitude is none %}
+                                <span class="map-missing">地図ピン未設定</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ event.category }}</td>
+                        <td>{{ event.organizer_name or '運営登録' }}</td>
+                        <td>{{ event.reservations }} 人</td>
+                        <td>{{ event.participants }} 人</td>
+                        <td>{{ '募集中' if event.status == 'open' else '中止' }}</td>
+                        <td>{{ {'pending': '審査待ち', 'reviewing': '審査中', 'changes_requested': '修正依頼', 'approved': '承認', 'rejected': '却下'}[event.review_status] }}</td>
+                        <td>
+                            {% if event.latitude is none or event.longitude is none %}
+                                <a href="{{ url_for('admin_event_location', event_id=event.id) }}" class="btn-edit" style="display:inline-block; text-decoration:none;">位置を設定</a>
+                            {% elif event.status == 'open' and event.participants == 0 and event.reservations == 0 %}
+                                <a href="{{ url_for('admin_event_edit', event_id=event.id) }}" class="btn-edit" style="display:inline-block; text-decoration:none;">編集</a>
+                            {% else %}
+                                <span class="muted">予約・参加記録あり</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+
+        </div>
+
+    </div>
+
+</body>
+</html>

@@ -1,0 +1,22 @@
+# CleanStep dependencies
+# ==========================================
+# Runtime: Python 3.13
+
+# Web application
+Flask==3.1.3
+Werkzeug==3.1.3
+
+# Object detection and machine learning
+ultralytics==8.4.174
+torch==2.14.1
+torchvision==0.29.1
+
+# Image processing
+Pillow==12.3.0
+qrcode[pil]==8.2
+
+# Data analysis
+numpy==2.5.3
+
+# Environment configuration
+python-dotenv==1.0.1

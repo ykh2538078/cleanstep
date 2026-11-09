@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CleanStep - エコごみ箱（AI画像判定）</title>
+    <style>
+        /* 🌿 CleanStep ブランド統一デザインの完全維持 */
+        body { font-family: 'Helvetica Neue', Arial, sans-serif; margin: 0; padding: 0; background-color: #f4f7f6; color: #333; text-align: center; }
+        .header { background: linear-gradient(135deg, #3498db, #2980b9); color: white; padding: 20px 64px; font-size: 20px; font-weight: bold; position: relative; }
+        .back-btn { position: absolute; left: 62px; top: 18px; color: white; text-decoration: none; font-size: 14px; background: rgba(255,255,255,0.2); padding: 6px 12px; border-radius: 20px; }
+        
+        .container { max-width: 500px; margin: 20px auto; padding: 0 15px; box-sizing: border-box; }
+        .card { background: white; padding: 25px; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.06); margin-bottom: 20px; text-align: left; }
+        h2 { font-size: 18px; margin: 0 0 15px 0; color: #2c3e50; border-left: 4px solid #3498db; padding-left: 8px; }
+        
+        .form-group { margin-bottom: 20px; }
+        label { display: block; font-weight: bold; font-size: 14px; margin-bottom: 8px; color: #566573; }
+        select, input[type="file"] { width: 100%; min-height: 48px; padding: 12px; box-sizing: border-box; border: 1px solid #d5dbdb; border-radius: 8px; font-size: 16px; background-color: #fcfcfc; }
+        
+        /* ゴミの種類カード（UI選択用） */
+        .trash-type-container { display: flex; gap: 10px; margin-bottom: 8px; }
+        .trash-type-item { flex: 1; background: #f8f9fa; border: 2px solid #ebedef; padding: 12px; border-radius: 8px; text-align: center; font-size: 14px; font-weight: bold; }
+        .trash-type-item.active { border-color: #3498db; background: #ebf5fb; color: #2980b9; }
+
+        /* 📸 写真撮影・プレビューエリア */
+        .preview-box { width: 100%; height: 200px; background: #eaeded; border: 2px dashed #b2babb; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: #7f8c8d; margin-top: 10px; overflow: hidden; position: relative; }
+        .preview-box img { width: 100%; height: 100%; object-fit: cover; }
+
+        /* 🚀 送信アクションボタン */
+        .btn-submit { width: 100%; min-height: 52px; padding: 15px; background: linear-gradient(135deg, #2ecc71, #27ae60); color: white; border: none; border-radius: 30px; font-size: 16px; font-weight: bold; cursor: pointer; box-shadow: 0 5px 15px rgba(46,204,113,0.3); transition: transform 0.2s; }
+        .btn-submit:hover { transform: translateY(-2px); }
+        .btn-submit:disabled { opacity: .72; cursor: wait; transform: none; }
+        .error-message { padding: 12px 14px; margin-bottom: 16px; border: 1px solid #f1b9b5; border-radius: 8px; background: #fff0ef; color: #8f241f; line-height: 1.5; text-align: left; }
+        .preview-box:empty { display: none; }
+        @media (max-width: 480px) {
+            .header { padding: 18px 60px; font-size: 17px; }
+            .back-btn { top: 12px; left: 62px; min-height: 44px; box-sizing: border-box; display: inline-flex; align-items: center; }
+            .container { margin: 14px auto; padding: 0 12px; }
+            .card { padding: 20px 16px; }
+            .trash-type-container { gap: 8px; }
+            .trash-type-item { padding: 10px 6px; font-size: 13px; }
+            .preview-box { height: min(62vw, 280px); min-height: 180px; }
+            .btn-submit { border-radius: 14px; }
+        }
+    </style>
+</head>
+<body>
+    {% include "_user_navigation.html" %}
+
+    <div class="header">
+        <a href="{{ url_for('home') }}" class="back-btn">✕ 戻る</a>
+        <a href="{{ url_for('home') }}" style="color:white; text-decoration:none;">📸 エコごみ箱（AI判定）</a>
+    </div>
+
+    <div class="container">
+        <!-- 🔑 app.py の trash_bin_deposit にマルチパートで安全送信するフォーム -->
+        <form action="{{ url_for('trash_bin_deposit') }}" method="POST" enctype="multipart/form-data">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            {% if error_msg %}
+                <p class="error-message" role="alert">{{ error_msg }}</p>
+            {% endif %}
+            
+            <!-- 1. 設置場所の選択 -->
+            <div class="card">
+                <h2>1. 設置場所を選択</h2>
+                <div class="form-group">
+                    <label for="bin_id">ごみ箱を選択（QR読み取りテスト用）</label>
+                    <select id="bin_id" name="bin_id" required {% if not bins %}disabled{% endif %}>
+                        {% for bin in bins %}
+                            <option value="{{ bin.id }}"
+                                    data-lat="{{ bin.lat }}"
+                                    data-lng="{{ bin.lng }}"
+                                    {% if bin.id == selected_bin_id %}selected{% endif %}>
+                                {{ bin.name }} — {{ bin.description }}
+                            </option>
+                        {% else %}
+                            <option value="">設置場所が未登録です</option>
+                        {% endfor %}
+                    </select>
+                    {% if bins %}
+                        {% set selected_bin = bins|selectattr('id', 'equalto', selected_bin_id)|first %}
+                        {% from "_bin_user_map.html" import bin_user_map %}
+                        <div id="selected-bin-map">
+                            {{ bin_user_map(selected_bin) }}
+                        </div>
+                    {% else %}
+                        <p class="error-message" role="status">
+                            ごみ箱の設置場所がまだ登録されていません。管理者に登録を依頼してください。
+                        </p>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- 2. ごみの種類と個数（🔴 バックエンド仕様に完全適応） -->
+            <div class="card">
+                <h2>2. ごみの種類と個数</h2>
+                <div class="form-group">
+                    <label>対象のごみ（複数混在していても自動検出されます）</label>
+                    <div class="trash-type-container">
+                        <div class="trash-type-item active">🍾 ペットボトル</div>
+                        <div class="trash-type-item active">🥤 カップ・容器類</div>
+                    </div>
+                    <p style="font-size:11px; color:#7f8c8d; margin: 8px 0 15px 0; line-height:1.4;">
+                        ※ 現在のデモでは、ペットボトルとカップ・容器類を判定します。<br>
+                        アルミ缶・スチール缶の判定は今後対応予定です。
+                    </p>
+                </div>
+
+                <div class="form-group">
+                    <label for="trash_count">投入するごみの総数（自己申告）</label>
+                    <select id="trash_count" name="trash_count">
+                        {% for i in range(1, 11) %}
+                            <option value="{{ i }}" {% if trash_count|int == i %}selected{% endif %}>{{ i }} 個</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+
+            <!-- 3. 写真撮影・証拠アップロード -->
+            <div class="card">
+                <h2>3. 証拠写真を撮影</h2>
+                <div class="form-group">
+                    <label for="garbage_image">写真を撮影、またはアルバムから選択</label>
+                    <!-- 🔒 バックエンドの画像検証（Pillow）に渡すための安全なインプット -->
+                    <input type="file" id="garbage_image" name="garbage_image" accept="image/*" required aria-describedby="camera-hint" onchange="previewImage(this);">
+                    <p id="camera-hint" style="font-size:12px; color:#7f8c8d; line-height:1.5;">スマートフォンではカメラで撮影するか、保存済みの写真を選べます。</p>
+                    
+                    <div class="preview-box" id="preview_container" role="status" aria-live="polite">
+                        <span>📸 ここに撮影した写真が表示されます</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 🚀 判定リクエスト送信 -->
+            <div style="margin: 25px 0 40px 0;">
+                <button type="submit" class="btn-submit" id="submit-button" {% if not bins %}disabled{% endif %}>🤖 AI判定をリクエストしてポイントを獲得</button>
+                <p id="submit-status" role="status" aria-live="polite"></p>
+            </div>
+
+        </form>
+    </div>
+
+    <!-- 📸 フロントエンド用の画像プレビュー軽量スクリプト（UX維持） -->
+    <script>
+        const binSelect = document.getElementById('bin_id');
+        if (binSelect && binSelect.options.length) {
+            binSelect.addEventListener('change', () => {
+                const option = binSelect.selectedOptions[0];
+                const lat = Number(option.dataset.lat);
+                const lng = Number(option.dataset.lng);
+                if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+
+                const bbox = [
+                    (lng - 0.004).toFixed(6),
+                    (lat - 0.0025).toFixed(6),
+                    (lng + 0.004).toFixed(6),
+                    (lat + 0.0025).toFixed(6)
+                ].join(',');
+                const marker = `${lat.toFixed(7)},${lng.toFixed(7)}`;
+                const mapFrame = document.querySelector('#selected-bin-map iframe');
+                const mapLink = document.getElementById('bin-map-link');
+                if (mapFrame) {
+                    mapFrame.src = `https://www.openstreetmap.org/export/embed.html?bbox=${bbox}&layer=mapnik&marker=${marker}`;
+                    mapFrame.title = `${option.textContent.trim()} の設置場所`;
+                }
+                if (mapLink) {
+                    mapLink.href = `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lng}#map=17/${lat}/${lng}`;
+                }
+            });
+        }
+
+        function previewImage(input) {
+            const container = document.getElementById('preview_container');
+            if (input.files && input.files[0]) {
+                const reader = new FileReader();
+                reader.onload = function() {
+                    const image = document.createElement('img');
+                    image.src = reader.result;
+                    image.alt = '選択した写真のプレビュー';
+                    container.replaceChildren(image);
+                }
+                reader.readAsDataURL(input.files[0]);
+            } else {
+                container.replaceChildren('📸 ここに撮影した写真が表示されます');
+            }
+        }
+        document.querySelector('form').addEventListener('submit', () => {
+            const button = document.getElementById('submit-button');
+            button.disabled = true;
+            button.textContent = '⏳ 写真を送信してAI判定中…';
+            document.getElementById('submit-status').textContent = '処理が完了するまでこの画面を閉じないでください。';
+        });
+    </script>
+
+</body>
+</html>

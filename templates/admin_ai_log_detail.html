@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CleanStep - AI判定詳細</title>
+
+    <style>
+        :root {
+            --primary-green: #2b8a3e;
+            --bg-gray: #f8f9fa;
+            --border-gray: #dee2e6;
+            --text-dark: #212529;
+            --text-muted: #6c757d;
+            --danger-red: #c0392b;
+            --info-blue: #2980b9;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: var(--bg-gray);
+            color: var(--text-dark);
+            margin: 0;
+            padding: 0;
+        }
+
+        nav {
+            background: #ffffff;
+            border-bottom: 1px solid var(--border-gray);
+            padding: 14px 20px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+        }
+
+        nav a {
+            text-decoration: none;
+            color: var(--text-muted);
+            font-weight: 700;
+        }
+
+        .container {
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 30px 20px;
+        }
+
+        .card {
+            background: #ffffff;
+            border: 1px solid var(--border-gray);
+            border-radius: 10px;
+            padding: 25px;
+            margin-bottom: 25px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.04);
+            transition: transform 0.2s ease-out;
+        }
+        .card:hover {
+            transform: translateY(-3px);
+        }
+
+        .title {
+            font-size: 1.3rem;
+            font-weight: 800;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .muted {
+            color: var(--text-muted);
+        }
+
+        .image-large {
+            width: 100%;
+            max-height: 400px;
+            object-fit: cover;
+            border-radius: 10px;
+            border: 1px solid var(--border-gray);
+        }
+
+        .info-box {
+            background: #f8f9fa;
+            border: 1px solid var(--border-gray);
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+        }
+
+        .flag {
+            color: var(--danger-red);
+            font-weight: 700;
+        }
+
+        .btn {
+            padding: 12px 18px;
+            border-radius: 6px;
+            font-weight: 700;
+            border: none;
+            cursor: pointer;
+        }
+
+        .btn-back {
+            background-color: #e9ecef;
+            color: var(--text-muted);
+        }
+
+        .btn-cancel {
+            background-color: var(--danger-red);
+            color: #fff;
+        }
+
+        .btn-cancel:hover {
+            background-color: #a93226;
+        }
+
+        .btn-correct {
+            background-color: var(--info-blue);
+            color: #fff;
+        }
+
+        .btn-correct:hover {
+            background-color: #1f6a8a;
+        }
+
+        .btn:disabled {
+            background-color: #adb5bd;
+            color: #fff;
+            cursor: not-allowed;
+            opacity: 0.75;
+        }
+        .btn:disabled:hover {
+            background-color: #adb5bd;
+        }
+
+        iframe {
+            width: 100%;
+            height: 300px;
+            border-radius: 10px;
+            border: 1px solid var(--border-gray);
+        }
+    </style>
+</head>
+
+<body>
+
+    <nav>
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+            <a href="{{ url_for('admin_ai_logs') }}">← AI判定一覧に戻る</a>
+            <span style="font-weight:800; font-size:1.2rem;">🤖 AI判定詳細</span>
+            <a href="{{ url_for('logout') }}" style="color:var(--primary-green); font-weight:700;">ログアウト</a>
+        </div>
+    </nav>
+
+    <div class="container">
+
+        <!-- 画像 -->
+        <div class="card">
+            <h2 class="title">📸 判定画像</h2>
+            {% if log.image_url %}
+            <img src="{{ log.image_url }}" class="image-large" alt="AI判定画像">
+            {% else %}
+            <p class="muted">画像が見つかりません。</p>
+            {% endif %}
+        </div>
+
+        <!-- AI判定結果 -->
+        <div class="card">
+            <h2 class="title">🤖 AI判定結果</h2>
+
+            <div class="info-box">
+                <strong>判定結果：</strong> {{ log.result_status_label }}
+            </div>
+
+            <div class="info-box">
+                <strong>AI検出数：</strong>
+                {% if log.detected_count is not none %}{{ log.detected_count }} 個{% else %}未記録{% endif %}
+            </div>
+
+            <div class="info-box">
+                <strong>信頼度：</strong>
+                {% if log.confidence_percent is not none %}{{ log.confidence_percent }}%{% else %}未記録{% endif %}
+            </div>
+
+            {% if log.flagged %}
+            <div class="info-box flag">
+                ⚠ 不正疑い：{{ log.flag_reason or '理由未保存（旧ログ）' }}
+            </div>
+            {% endif %}
+        </div>
+
+        <!-- ユーザー情報 -->
+        <div class="card">
+            <h2 class="title">👤 ユーザー情報</h2>
+
+            <div class="info-box">
+                <strong>ユーザー名：</strong> {{ log.user_name or 'ユーザー情報なし' }}
+            </div>
+
+            <div class="info-box">
+                <strong>メールアドレス：</strong> {{ log.email or '-' }}
+            </div>
+
+            <div class="info-box">
+                <strong>ユーザーID：</strong> {{ log.user_id }}
+            </div>
+
+            <div class="info-box">
+                <strong>過去のAI判定数：</strong> {{ log.user_history_count }} 件
+            </div>
+
+            <div class="info-box">
+                <strong>過去の不正検知数：</strong> {{ log.prior_flag_count }} 件
+            </div>
+
+            <div class="info-box">
+                <strong>活動回数：</strong> {{ log.activity_count }} 回
+            </div>
+
+            <div class="info-box">
+                <strong>累計獲得ポイント：</strong> {{ log.lifetime_points }} pt
+            </div>
+        </div>
+
+        <!-- ポイント付与状況 -->
+        <div class="card">
+            <h2 class="title">🎁 ポイント付与状況</h2>
+
+            <div class="info-box">
+                <strong>付与ポイント：</strong> {{ log.points if log.points is not none else '-' }}{% if log.points is not none %} pt{% endif %}
+            </div>
+
+            <div class="info-box">
+                <strong>付与日時：</strong> {{ log.point_timestamp or '-' }}
+            </div>
+        </div>
+
+        <!-- 管理者操作 -->
+        <div class="card">
+            <h2 class="title">🛠 管理者操作</h2>
+
+            <button class="btn btn-correct" type="button" disabled title="この操作は未実装です">AI判定を手動修正する</button>
+
+            <button class="btn btn-cancel" type="button" disabled title="この操作は未実装です">ポイント付与を取消する</button>
+        </div>
+
+    </div>
+
+</body>
+</html>

@@ -1,0 +1,112 @@
+{% from "_event_location_map.html" import event_map_link %}
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>参加者一覧 | CleanStep</title>
+    <style>
+        body { margin: 0; padding: 60px 16px 24px; background: #f4f7f6; color: #263238; font-family: "Yu Gothic", Meiryo, sans-serif; }
+        main { max-width: 1000px; margin: 0 auto; }
+        section { padding: 18px; background: #fff; border: 1px solid #dce5e1; border-radius: 8px; overflow-x: auto; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 11px; border-bottom: 1px solid #dce5e1; text-align: left; }
+        th { background: #edf5f0; }
+        .muted { color: #596a63; }
+        .feedback-summary { margin-top: 22px; padding: 18px; background: #f2faf5; border: 1px solid #cce8d6; border-radius: 8px; }
+        .feedback-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: 10px; margin: 14px 0; }
+        .feedback-stat { background: #fff; border-radius: 7px; padding: 12px; }
+        .feedback-stat strong { display: block; color: #218c54; font-size: 20px; margin-top: 4px; }
+        .feedback-item { background: #fff; padding: 14px; border-radius: 8px; margin: 12px 0; }
+        .feedback-item blockquote { margin: 0 0 12px; line-height: 1.7; }
+        .feedback-form { display: grid; grid-template-columns: 1fr; gap: 8px; }
+        .feedback-form select, .feedback-form textarea { box-sizing: border-box; width: 100%; padding: 9px; border: 1px solid #cbd8d0; border-radius: 6px; font: inherit; }
+        .feedback-form textarea { min-height: 64px; resize: vertical; }
+        .feedback-form button { justify-self: start; padding: 9px 16px; border: 0; border-radius: 6px; color: #fff; background: #218c54; font-weight: bold; cursor: pointer; }
+    </style>
+</head>
+<body>
+    {% include "_organizer_navigation.html" %}
+<main>
+    <p><a href="{{ url_for('organizer_events') }}">← 団体イベント管理に戻る</a></p>
+    <h1>{{ event.name }}：予約者・参加者</h1>
+    <p class="muted">{{ event.datetime }} / {{ event.location }}</p>
+    {{ event_map_link(event) }}
+    {% if event.status == 'open' %}
+        <section style="margin:16px 0;">
+            <h2>予約者へお知らせ</h2>
+            <p class="muted">中止や時間変更などを、現在予約中の参加者のお知らせ欄へ送ります（1000文字以内）。</p>
+            <form method="post" action="{{ url_for('organizer_event_message', event_id=event.id) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <label for="organizer-message">メッセージ</label>
+                <textarea id="organizer-message" name="message" maxlength="1000" required style="display:block;width:100%;min-height:100px;margin:8px 0;padding:10px;font:inherit;box-sizing:border-box;"></textarea>
+                <button type="submit" style="padding:10px 16px;border:0;border-radius:6px;background:#218c54;color:white;font-weight:bold;">予約者へ送信</button>
+            </form>
+        </section>
+    {% endif %}
+    <section>
+        <table>
+            <thead><tr><th>氏名</th><th>メールアドレス</th><th>状態</th><th>予約日時</th><th>完了日時</th><th>獲得ポイント</th></tr></thead>
+            <tbody>
+            {% for participant in participants %}
+                <tr>
+                    <td>{{ participant.name }}</td>
+                    <td>{{ participant.email }}</td>
+                    <td>{{ {'reserved': '予約中', 'completed': '参加完了', 'cancelled': 'キャンセル'}[participant.status] }}</td>
+                    <td>{{ participant.reserved_at }}</td>
+                    <td>{{ participant.completed_at or '—' }}</td>
+                    <td>{{ participant.points_earned if participant.points_earned is not none else '—' }}</td>
+                </tr>
+            {% else %}
+                <tr><td colspan="6">予約者・参加者はいません。</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </section>
+
+    <section class="feedback-summary" aria-labelledby="feedback-title">
+        <h2 id="feedback-title">イベント後アンケート</h2>
+        <p class="muted">参加完了 {{ completed_count }} 人のうち、{{ feedback_summary.responses }} 人が回答（回答率 {{ response_rate }}%）</p>
+        {% for category, message in get_flashed_messages(with_categories=true) %}
+            <p role="status">{{ message }}</p>
+        {% endfor %}
+        {% if feedback_summary.responses %}
+            <div class="feedback-stats">
+                <div class="feedback-stat">平均満足度<strong>{{ feedback_summary.average_satisfaction }} / 5</strong></div>
+                <div class="feedback-stat">次回も参加したい<strong>{{ feedback_summary.yes_count or 0 }} 人</strong></div>
+                <div class="feedback-stat">日時・内容によって参加<strong>{{ feedback_summary.maybe_count or 0 }} 人</strong></div>
+                <div class="feedback-stat">次回参加は難しい<strong>{{ feedback_summary.no_count or 0 }} 人</strong></div>
+                <div class="feedback-stat">自由記述の対応済み<strong>{{ reflection_rate }}%（{{ feedback_summary.addressed_comments or 0 }}/{{ feedback_summary.comment_count or 0 }}件）</strong></div>
+            </div>
+            {% if feedback_comments %}
+                <h3>改善コメントと対応状況（回答者名は表示しません）</h3>
+                {% for feedback in feedback_comments %}
+                    <article class="feedback-item">
+                        <blockquote>{{ feedback.comment }}</blockquote>
+                        <form class="feedback-form" method="post" action="{{ url_for('organizer_event_feedback_update', event_id=event.id, feedback_id=feedback.id) }}">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                            <label>対応状況
+                                <select name="action_status" required>
+                                    <option value="pending" {% if feedback.action_status == 'pending' %}selected{% endif %}>未確認</option>
+                                    <option value="planned" {% if feedback.action_status == 'planned' %}selected{% endif %}>対応予定</option>
+                                    <option value="addressed" {% if feedback.action_status == 'addressed' %}selected{% endif %}>対応済み</option>
+                                    <option value="not_planned" {% if feedback.action_status == 'not_planned' %}selected{% endif %}>対応しない</option>
+                                </select>
+                            </label>
+                            <label>対応メモ（任意・500文字以内）
+                                <textarea name="action_note" maxlength="500" placeholder="次回から集合時刻を30分遅らせる、など">{{ feedback.action_note }}</textarea>
+                            </label>
+                            <button type="submit">対応状況を保存</button>
+                        </form>
+                    </article>
+                {% endfor %}
+            {% else %}
+                <p class="muted">自由記述の回答はありません。</p>
+            {% endif %}
+        {% else %}
+            <p class="muted">まだ回答はありません。参加者が回答すると、ここに集計が表示されます。</p>
+        {% endif %}
+    </section>
+</main>
+</body>
+</html>

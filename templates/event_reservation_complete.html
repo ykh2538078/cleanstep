@@ -1,0 +1,114 @@
+{% from "_event_location_map.html" import event_map_link %}
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>予約完了 | CleanStep</title>
+    <style>
+        :root {
+            --green: #218c59;
+            --green-dark: #17633f;
+            --green-pale: #e8f8ee;
+            --ink: #263238;
+            --muted: #64748b;
+            --line: #dce8e1;
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            background: #f4f7f6;
+            color: var(--ink);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Yu Gothic", Meiryo, sans-serif;
+        }
+        .header {
+            padding: 22px 64px;
+            background: linear-gradient(135deg, #2ecc71, #27ae60);
+            color: #fff;
+            text-align: center;
+            font-size: 20px;
+            font-weight: 800;
+        }
+        main { width: min(560px, calc(100% - 28px)); margin: 28px auto 48px; }
+        .card {
+            padding: 26px;
+            border: 1px solid var(--line);
+            border-radius: 16px;
+            background: #fff;
+            box-shadow: 0 5px 20px rgba(20, 70, 45, .06);
+        }
+        .success {
+            margin-bottom: 22px;
+            padding: 18px;
+            border: 1px solid #b7e4c7;
+            border-radius: 12px;
+            background: var(--green-pale);
+            color: var(--green-dark);
+            text-align: center;
+        }
+        .success-icon { display: block; margin-bottom: 6px; font-size: 30px; }
+        h1 { margin: 0; font-size: 22px; }
+        .success p { margin: 8px 0 0; font-size: 14px; line-height: 1.6; }
+        h2 { margin: 0 0 16px; font-size: 17px; }
+        .detail { padding: 13px 0; border-top: 1px solid #edf2ef; }
+        .detail-label { display: block; margin-bottom: 4px; color: var(--muted); font-size: 12px; font-weight: 700; }
+        .detail-value { font-size: 15px; line-height: 1.6; overflow-wrap: anywhere; }
+        .actions { display: grid; gap: 10px; margin-top: 22px; }
+        .button {
+            display: flex;
+            min-height: 48px;
+            align-items: center;
+            justify-content: center;
+            padding: 12px 16px;
+            border: 1px solid var(--green);
+            border-radius: 10px;
+            color: var(--green-dark);
+            background: #fff;
+            font-size: 15px;
+            font-weight: 750;
+            text-align: center;
+            text-decoration: none;
+        }
+        .button-primary { color: #fff; background: var(--green); }
+        .button:hover { filter: brightness(.97); }
+        @media (max-width: 480px) {
+            .header { padding: 18px 60px; font-size: 18px; }
+            main { margin-top: 18px; }
+            .card { padding: 20px 17px; }
+            h1 { font-size: 20px; }
+        }
+    </style>
+</head>
+<body>
+    {% include "_user_navigation.html" %}
+    <header class="header">イベント予約</header>
+    <main>
+        <section class="card" aria-labelledby="reservation-title">
+            <div class="success" role="status">
+                <span class="success-icon" aria-hidden="true">✓</span>
+                <h1 id="reservation-title">予約を受け付けました</h1>
+                <p>予約内容は「予約したイベント」からいつでも確認できます。</p>
+            </div>
+            <h2>予約したイベント</h2>
+            <div class="detail">
+                <span class="detail-label">イベント名</span>
+                <span class="detail-value">{{ event['name'] }}</span>
+            </div>
+            <div class="detail">
+                <span class="detail-label">開催日時</span>
+                <span class="detail-value">{{ event['datetime']|replace('-', '/') }}</span>
+            </div>
+            <div class="detail">
+                <span class="detail-label">集合・開催場所</span>
+                <span class="detail-value">{{ event['location'] }}</span>
+                {{ event_map_link(event) }}
+            </div>
+            <div class="actions">
+                <a class="button button-primary" href="{{ url_for('my_reservations') }}">予約したイベントを確認</a>
+                <a class="button" href="{{ url_for('event_reserve', event_id=event['id']) }}">イベント詳細へ戻る</a>
+                <a class="button" href="{{ url_for('home') }}">ホームへ</a>
+            </div>
+        </section>
+    </main>
+</body>
+</html>

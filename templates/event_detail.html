@@ -1,0 +1,83 @@
+{% from "_event_location_map.html" import event_map_embed %}
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CleanStep - イベント詳細</title>
+    <style>
+        /* 🌿 🟣 CleanStep ブランド統一デザインの完全維持 */
+        body { font-family: 'Helvetica Neue', Arial, sans-serif; margin: 0; padding: 0; background-color: #f4f7f6; color: #333; text-align: center; }
+        .header { background: linear-gradient(135deg, #2ecc71, #27ae60); color: white; padding: 20px; font-size: 20px; font-weight: bold; position: relative; }
+        .back-btn { position: absolute; left: 62px; top: 18px; color: white; text-decoration: none; font-size: 14px; background: rgba(255,255,255,0.2); padding: 6px 12px; border-radius: 20px; }
+        
+        .container { max-width: 500px; margin: 20px auto; padding: 0 15px; box-sizing: border-box; }
+        /* 白背景・カードの浮き上がり（box-shadow）の再現 */
+        .card { background: white; padding: 30px; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.06); margin-bottom: 25px; text-align: left; }
+        
+        .event-name { font-size: 24px; font-weight: bold; color: #2c3e50; margin: 0 0 20px 0; border-left: 5px solid #2ecc71; padding-left: 12px; line-height: 1.3; }
+        
+        /* 詳細情報のリストスタイル */
+        .info-group { margin-bottom: 18px; padding-bottom: 12px; border-bottom: 1px solid #f2f4f4; }
+        .info-group:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+        .info-label { font-size: 12px; color: #7f8c8d; font-weight: bold; display: block; margin-bottom: 4px; }
+        .info-value { font-size: 16px; color: #34495e; font-weight: 500; }
+        
+        /* ポイントバッジ（CSブランドの緑: #2ecc71） */
+        .bonus-badge { display: inline-block; background-color: #e8f8f5; color: #2ecc71; font-weight: bold; padding: 5px 12px; border-radius: 6px; font-size: 15px; }
+        
+        .description-box { background-color: #f8f9fa; padding: 15px; border-radius: 8px; font-size: 14px; color: #566573; line-height: 1.6; margin-top: 10px; }
+
+        /* 🚀 活動完了アクションボタン（緑グラデーション） */
+        .btn-complete { width: 100%; padding: 16px; background: linear-gradient(135deg, #2ecc71, #27ae60); color: white; border: none; border-radius: 30px; font-size: 18px; font-weight: bold; cursor: pointer; box-shadow: 0 6px 15px rgba(46,204,113,0.3); transition: transform 0.2s; }
+        .btn-complete:hover { transform: translateY(-2px); }
+    </style>
+</head>
+<body>
+    {% include "_user_navigation.html" %}
+
+    <!-- ✕ボタンで確実にマイページ（/home）へ戻れる設計 -->
+    <div class="header">
+        <a href="{{ url_for('home') }}" class="back-btn">✕ 戻る</a>
+        <a href="{{ url_for('home') }}" style="color:white; text-decoration:none;">📅 イベント詳細</a>
+    </div>
+
+    <div class="container">
+        <div class="card">
+            <!-- 🔑 Python（app.py）のデータベースから動的にイベント名を表示 -->
+            <div class="event-name">{{ event['name'] }}</div>
+            
+            <div class="info-group">
+                <span class="info-label">📍 開催場所</span>
+                <span class="info-value">{{ event['location'] }}</span>
+                {{ event_map_embed(event) }}
+            </div>
+            
+            <div class="info-group">
+                <span class="info-label">🕒 開催日時</span>
+                <span class="info-value">{{ event['datetime'] }}</span>
+            </div>
+            
+            <div class="info-group">
+                <span class="info-label">🪙 獲得ボーナス</span>
+                <span class="bonus-badge">+{{ event['bonus_points'] }} pt</span>
+            </div>
+
+            <div class="info-group">
+                <span class="info-label">🎁 参加者向け特典</span>
+                <span class="info-value">{{ event['reward_details'] or '特典の提供はありません' }}</span>
+            </div>
+
+            <div class="info-group" style="border: none;">
+                <span class="info-label">📝 活動内容</span>
+                <div class="description-box">
+                    指定の場所に集まり、地域のボランティアや美化団体と協力してポイ捨てされたペットボトルやプラスチック容器の回収を行います。ゴミ袋とトングは現地で支給されます。
+                </div>
+            </div>
+        </div>
+
+        <a href="{{ url_for('event_reserve', event_id=event['id']) }}" class="btn-complete" style="display:block; text-decoration:none; box-sizing:border-box;">イベント内容を確認して予約</a>
+    </div>
+
+</body>
+</html>

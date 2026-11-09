@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>主催者申請の審査 | CleanStep</title>
+    <style>
+        body { margin: 0; padding: 24px 16px; background: #f4f7f6; color: #263238; font-family: "Yu Gothic", Meiryo, sans-serif; }
+        main { max-width: 1000px; margin: 24px auto; }
+        h1 { font-size: 1.45rem; }
+        .application { margin: 16px 0; padding: 20px; background: #fff; border: 1px solid #dce5e1; border-radius: 8px; }
+        .meta { color: #596a63; font-size: .92rem; }
+        .status { font-weight: 700; }
+        form { display: inline-block; margin: 12px 8px 0 0; }
+        button { padding: 9px 14px; border: 0; border-radius: 5px; color: #fff; font-weight: 700; cursor: pointer; }
+        .approve { background: #257a52; }
+        .reject { background: #a33b36; }
+    </style>
+</head>
+<body>
+    {% include "_admin_navigation.html" %}
+<main>
+    <h1>地域イベント主催者の申請</h1>
+    <p><a href="{{ url_for('admin_events') }}">イベント管理に戻る</a></p>
+    {% for application in applications %}
+        <section class="application">
+            <h2>{{ application.organization_name }}</h2>
+            <p class="meta">申請者: {{ application.applicant_name }}（{{ application.applicant_email }}）</p>
+            <p class="meta">連絡先: {{ application.contact }} / 申請日: {{ application.created_at }}</p>
+            <p>{{ application.purpose }}</p>
+            <p class="status">状態: {{ {'pending': '審査待ち', 'approved': '承認', 'rejected': '否認'}[application.status] }}</p>
+            {% if application.status == 'pending' %}
+                <form method="POST" action="{{ url_for('review_organizer_application', application_id=application.id) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <input type="hidden" name="decision" value="approved">
+                    <button class="approve" type="submit">承認</button>
+                </form>
+                <form method="POST" action="{{ url_for('review_organizer_application', application_id=application.id) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <input type="hidden" name="decision" value="rejected">
+                    <button class="reject" type="submit">否認</button>
+                </form>
+            {% elif application.reviewed_at %}
+                <p class="meta">審査日時: {{ application.reviewed_at }}</p>
+            {% endif %}
+        </section>
+    {% else %}
+        <p>申請はまだありません。</p>
+    {% endfor %}
+</main>
+</body>
+</html>
