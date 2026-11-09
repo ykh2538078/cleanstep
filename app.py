@@ -12,10 +12,11 @@ import re
 import subprocess
 import threading
 import qrcode
+import time
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from functools import wraps
-from flask import Flask, flash, render_template, request, redirect, url_for, session, send_from_directory, abort
+from flask import Flask, flash, render_template, request, redirect, url_for, session, send_from_directory, abort, g
 from werkzeug.utils import secure_filename
 from dotenv import load_dotenv
 # パスワードをハッシュ化
@@ -112,6 +113,12 @@ def get_db():
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
+@app.teardown_appcontext
+def close_db(exception=None):
+    db = g.pop('db', None)
+    if db is not None:
+        db.close()
+
 
 def _auth_rate_key(kind, subject=''):
     value = f"{kind}|{request.remote_addr or 'unknown'}|{subject}"
@@ -164,6 +171,7 @@ def get_user_organization_id(conn, user_id):
 
 JST = timezone(timedelta(hours=9))
 EVENT_MIN_DURATION_SECONDS = 15 * 60
+EVENT_MAX_SESSION_DURATION_SECONDS = 12 * 60 * 60
 EVENT_LOCATION_RADIUS_METERS = 200
 MAX_GPS_WALK_SPEED_MPS = 3.0
 MAX_DEVICE_STEPS_PER_SECOND = 4.0
@@ -260,7 +268,11 @@ def calculate_gps_metrics(raw_points, started_at, now):
 
 
 def init_db():
-    with closing(get_db()) as conn, conn:
+    conn = sqlite3.connect(DATABASE)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    with closing(conn), conn:
+        # （中のテーブル作成・マイグレーション処理はそのまま）
         # 1. ユーザーテーブルの作成と不足列の追加
         user_columns = [row['name'] for row in conn.execute('PRAGMA table_info(users)').fetchall()]
         login_destination_added = False
@@ -295,6 +307,11 @@ def init_db():
                     DEFAULT 'user'
                     CHECK(login_destination IN ('user', 'organizer'))
             ''')
+        if 'onboarding_completed' not in user_columns:
+            conn.execute('''
+                ALTER TABLE users ADD COLUMN onboarding_completed INTEGER NOT NULL
+                    DEFAULT 0 CHECK(onboarding_completed IN (0, 1))
+            ''')
         conn.execute('''
             CREATE TABLE IF NOT EXISTS auth_rate_limits (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -314,6 +331,7 @@ def init_db():
                 datetime TEXT,
                 bonus_points INTEGER,
                 organizer_id INTEGER,
+                capacity INTEGER NOT NULL DEFAULT 20 CHECK(capacity >= 1),
                 status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open', 'cancelled')),
                 review_status TEXT NOT NULL DEFAULT 'approved'
                     CHECK(review_status IN ('pending', 'reviewing', 'changes_requested', 'approved', 'rejected')),
@@ -332,6 +350,10 @@ def init_db():
             conn.execute('ALTER TABLE events ADD COLUMN latitude REAL')
         if 'longitude' not in event_cols:
             conn.execute('ALTER TABLE events ADD COLUMN longitude REAL')
+        if 'capacity' not in event_cols:
+            conn.execute(
+                'ALTER TABLE events ADD COLUMN capacity INTEGER NOT NULL DEFAULT 20'
+            )
         if 'status' not in event_cols:
             conn.execute("ALTER TABLE events ADD COLUMN status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open', 'cancelled'))")
         if 'review_status' not in event_cols:
@@ -382,6 +404,31 @@ def init_db():
             )
         ''')
         conn.execute('CREATE INDEX IF NOT EXISTS idx_event_reservations_event_status ON event_reservations(event_id, status)')
+
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS user_notifications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                event_id INTEGER,
+                notification_type TEXT NOT NULL
+                    CHECK(notification_type IN ('reminder', 'organizer_message', 'cancellation')),
+                title TEXT NOT NULL,
+                message TEXT NOT NULL CHECK(length(message) <= 1000),
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                read_at TEXT,
+                FOREIGN KEY (user_id) REFERENCES users(id),
+                FOREIGN KEY (event_id) REFERENCES events(id)
+            )
+        ''')
+        conn.execute('''
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_user_notifications_reminder_once
+            ON user_notifications(user_id, event_id, notification_type)
+            WHERE notification_type = 'reminder'
+        ''')
+        conn.execute('''
+            CREATE INDEX IF NOT EXISTS idx_user_notifications_user_unread
+            ON user_notifications(user_id, read_at, created_at)
+        ''')
 
         conn.execute('''
             CREATE TABLE IF NOT EXISTS trash_bins (
@@ -1058,7 +1105,8 @@ def organizer_required(func):
             conn.close()
 
         if not organization_id:
-            return redirect(url_for('organizer_apply'))
+            flash('団体機能は、審査で承認された団体メンバーのみ利用できます。', 'info')
+            return redirect(url_for('home'))
         return func(*args, **kwargs)
     return wrapper
 
@@ -1173,6 +1221,17 @@ def format_jst_datetime(value):
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone(timedelta(hours=9))).strftime('%Y-%m-%d %H:%M')
 
+
+@app.template_filter('event_datetime')
+def format_event_datetime(value):
+    if not value:
+        return ''
+    try:
+        return parse_event_datetime(value).strftime('%Y-%m-%d %H:%M')
+    except (TypeError, ValueError):
+        return value
+
+
 @app.template_filter('event_started')
 def event_started(value):
     try:
@@ -1184,7 +1243,49 @@ def event_started(value):
 def inject_csrf_token():
     if 'csrf_token' not in session:
         session['csrf_token'] = secrets.token_urlsafe(32)
-    return {'csrf_token': session['csrf_token']}
+    unread_notifications = 0
+    if session.get('role') == 'user' and session.get('user_id'):
+        conn = get_db()
+        try:
+            # ここでは書き込み(_create_due_event_reminders)を呼ばず、読み取りのみにする
+            unread_notifications = conn.execute('''
+                SELECT COUNT(*) FROM user_notifications
+                WHERE user_id = ? AND read_at IS NULL
+            ''', (session['user_id'],)).fetchone()[0]
+        finally:
+            conn.close()
+    return {
+        'csrf_token': session['csrf_token'],
+        'unread_notifications': unread_notifications,
+    }
+
+
+def _create_due_event_reminders(conn, user_id):
+    now = datetime.now(JST)
+    reminder_limit = now + timedelta(hours=48)
+    upcoming = conn.execute('''
+        SELECT e.id, e.name, e.datetime, e.location
+        FROM event_reservations r
+        JOIN events e ON e.id = r.event_id
+        WHERE r.user_id = ? AND r.status = 'reserved'
+          AND e.status = 'open' AND e.review_status = 'approved'
+    ''', (user_id,)).fetchall()
+    with conn:
+        for event in upcoming:
+            try:
+                starts_at = parse_event_datetime(event['datetime'])
+            except (TypeError, ValueError):
+                continue
+            if now < starts_at <= reminder_limit:
+                conn.execute('''
+                    INSERT OR IGNORE INTO user_notifications (
+                        user_id, event_id, notification_type, title, message
+                    ) VALUES (?, ?, 'reminder', ?, ?)
+                ''', (
+                    user_id, event['id'],
+                    f"まもなく開催：{event['name']}",
+                    f"開催日時：{starts_at.strftime('%Y年%m月%d日 %H:%M')}\n開催場所：{event['location']}",
+                ))
 
 # ==========================================
 # ログイン ＆ 新規登録処理
@@ -1271,6 +1372,18 @@ def register():
         name = (request.form.get('name') or '').strip()
         email = (request.form.get('email') or '').strip().lower()
         password = request.form.get('password') or ''
+        account_type = (request.form.get('account_type') or 'individual').strip()
+        organization_name = (request.form.get('organization_name') or '').strip()
+        organization_contact = (request.form.get('organization_contact') or '').strip()
+        organization_purpose = (request.form.get('organization_purpose') or '').strip()
+        register_values = {
+            'name': name,
+            'email': email,
+            'account_type': account_type,
+            'organization_name': organization_name,
+            'organization_contact': organization_contact,
+            'organization_purpose': organization_purpose,
+        }
 
         rate_key = _auth_rate_key('register')
         conn = get_db()
@@ -1281,16 +1394,26 @@ def register():
         finally:
             conn.close()
 
-        if (
+        error_msg = None
+        if account_type not in {'individual', 'organization'}:
+            error_msg = '利用区分を選択してください。'
+        elif (
             not name or len(name) > 80
             or len(email) > 254
             or not re.fullmatch(r'[^@\s]+@[^@\s]+\.[^@\s]+', email)
             or len(password) < 8 or len(password) > 128
         ):
+            error_msg = '名前は1〜80文字、メールアドレスは有効な形式、パスワードは8〜128文字で入力してください。'
+        elif account_type == 'organization' and (
+            not organization_name or len(organization_name) > 100
+            or not organization_contact or len(organization_contact) > 200
+            or not organization_purpose or len(organization_purpose) > 1000
+        ):
+            error_msg = '団体名、連絡先、活動内容を入力してください（団体名100文字、連絡先200文字、活動内容1000文字以内）。'
+        if error_msg:
             return render_template(
                 'register.html',
-                error_msg="名前は1〜80文字、メールアドレスは有効な形式、パスワードは8〜128文字で入力してください。",
-                name=name or '', email=email or ''
+                error_msg=error_msg, **register_values,
             )
 
         conn = get_db()
@@ -1301,12 +1424,28 @@ def register():
             if existing:
                 return render_template(
                     'register.html', error_msg="このメールアドレスは既に登録されています。",
-                    name=name, email=email
+                    **register_values,
                 )
 
             hashed_password = generate_password_hash(password)
-            conn.execute('INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, "user")', (name, email, hashed_password))
-            conn.commit()
+            with conn:
+                cursor = conn.execute(
+                    'INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, "user")',
+                    (name, email, hashed_password),
+                )
+                if account_type == 'organization':
+                    conn.execute('''
+                        INSERT INTO organizer_applications (
+                            user_id, organization_name, contact, purpose
+                        ) VALUES (?, ?, ?, ?)
+                    ''', (
+                        cursor.lastrowid, organization_name,
+                        organization_contact, organization_purpose,
+                    ))
+            if account_type == 'organization':
+                flash('ユーザーアカウントと団体申請を受け付けました。団体機能は管理者の承認後に利用できます。', 'success')
+            else:
+                flash('アカウントを作成しました。ログインしてください。', 'success')
             return redirect(url_for('login'))
         except Exception:
             conn.rollback()
@@ -1314,12 +1453,16 @@ def register():
             return render_template(
                 'register.html',
                 error_msg="内部エラーが発生しました。時間をおいて再度お試しください。",
-                name=name or '', email=email or ''
+                **register_values,
             )
         finally:
             conn.close()
 
-    return render_template('register.html', error_msg=None, name='', email='')
+    return render_template(
+        'register.html', error_msg=None, name='', email='',
+        account_type='individual', organization_name='',
+        organization_contact='', organization_purpose='',
+    )
 
 # ==========================================
 # 一般ユーザー専用マイページ（/home - UI連動・完全修復版）
@@ -1478,6 +1621,9 @@ def home():
         if user is None:
             conn.close()
             return redirect(url_for('logout'))
+        organizer_access = get_user_organization_id(conn, user_id) is not None
+
+        _create_due_event_reminders(conn, user_id)
 
         my_report = generate_user_report(conn, user_id)
 
@@ -1489,11 +1635,10 @@ def home():
             ORDER BY datetime
         """).fetchall()
         all_event_count = len(events)
-        application = conn.execute('''
+        organization_application = conn.execute('''
             SELECT status FROM organizer_applications
             WHERE user_id = ? ORDER BY id DESC LIMIT 1
         ''', (user_id,)).fetchone()
-        history = conn.execute('SELECT * FROM activity_history WHERE user_id = ? ORDER BY id DESC', (user_id,)).fetchall()
         today_sum = conn.execute('''
             SELECT IFNULL(SUM(points_earned), 0) AS today_sum 
             FROM activity_history 
@@ -1516,16 +1661,26 @@ def home():
             WHERE user_id = ? AND status = 'reserved'
         """, (user_id,)).fetchall()
         reserved_events = set(row['event_id'] for row in reservation_rows)
-        my_reserved_events = conn.execute("""
-            SELECT e.*
+        all_reserved_event_count = conn.execute("""
+            SELECT COUNT(*)
             FROM event_reservations r
             JOIN events e ON e.id = r.event_id
             WHERE r.user_id = ? AND r.status = 'reserved'
                 AND e.status = 'open' AND e.review_status = 'approved'
-            ORDER BY CASE WHEN e.datetime >= datetime('now', '+9 hours') THEN 0 ELSE 1 END,
-                     e.datetime
-        """, (user_id,)).fetchall()
-        all_reserved_event_count = len(my_reserved_events)
+        """, (user_id,)).fetchone()[0]
+        next_reserved_event = conn.execute("""
+            SELECT e.*,
+                   (SELECT COUNT(*) FROM event_reservations active_r
+                    WHERE active_r.event_id = e.id
+                      AND active_r.status = 'reserved') AS reserved_count
+            FROM event_reservations r
+            JOIN events e ON e.id = r.event_id
+            WHERE r.user_id = ? AND r.status = 'reserved'
+                AND e.status = 'open' AND e.review_status = 'approved'
+                AND e.datetime >= datetime('now', '+9 hours')
+            ORDER BY e.datetime
+            LIMIT 1
+        """, (user_id,)).fetchone()
         available_events = [
             event for event in events
             if event['id'] not in joined_events
@@ -1546,7 +1701,6 @@ def home():
         activity_schedule = build_recommended_activity_schedule(
             available_events, preferred_categories
         )
-        
         conn.close()
 
         user_dict = dict(user)
@@ -1555,10 +1709,18 @@ def home():
         return render_template(
             'menu.html', 
             user=user_dict, events=events[:3], event_count=all_event_count,
-            history=history, stats=stats, 
-            organizer_status=application['status'] if application else None,
+            stats=stats,
+            organization_application_pending=(
+                organization_application is not None
+                and organization_application['status'] == 'pending'
+            ),
+            organizer_access=organizer_access,
+            show_onboarding=(
+                not user['onboarding_completed']
+                and not session.get('onboarding_dismissed')
+            ),
             reserved_events=reserved_events,
-            my_reserved_events=my_reserved_events[:3],
+            next_reserved_event=next_reserved_event,
             reserved_event_count=all_reserved_event_count,
             joined_events=joined_events,
             my_report=my_report,
@@ -1568,6 +1730,41 @@ def home():
     except Exception:
         app.logger.exception("マイページ表示エラー")
         return "内部エラーが発生しました。時間をおいて再度お試しください。"
+
+
+@app.route('/guide')
+@user_required
+def user_guide():
+    return render_template('user_guide.html')
+
+
+@app.route('/onboarding/dismiss', methods=['POST'])
+@user_required
+def dismiss_onboarding():
+    if not validate_csrf():
+        return 'CSRFトークンが不正です。', 400
+
+    action = request.form.get('action')
+    if action not in {'later', 'complete', 'guide'}:
+        return '操作内容が正しくありません。', 400
+
+    if action == 'later':
+        session['onboarding_dismissed'] = True
+    else:
+        conn = get_db()
+        try:
+            with conn:
+                conn.execute(
+                    'UPDATE users SET onboarding_completed = 1 WHERE id = ?',
+                    (session['user_id'],),
+                )
+        finally:
+            conn.close()
+        session['onboarding_dismissed'] = True
+        if action == 'guide':
+            return redirect(url_for('user_guide'))
+    return redirect(url_for('home'))
+
 
 @app.route('/mypage')
 @user_required
@@ -1630,11 +1827,14 @@ def all_events():
     conn = get_db()
     try:
         events = conn.execute("""
-            SELECT * FROM events
-            WHERE status = 'open' AND review_status = 'approved'
-                AND datetime >= datetime('now', '+9 hours')
-                AND datetime <= datetime('now', '+9 hours', '+365 days')
-            ORDER BY datetime
+            SELECT e.*,
+                   (SELECT COUNT(*) FROM event_reservations r
+                    WHERE r.event_id = e.id AND r.status = 'reserved') AS reserved_count
+            FROM events e
+            WHERE e.status = 'open' AND e.review_status = 'approved'
+                AND e.datetime >= datetime('now', '+9 hours')
+                AND e.datetime <= datetime('now', '+9 hours', '+365 days')
+            ORDER BY e.datetime
         """).fetchall()
         reserved_events = {
             row['event_id'] for row in conn.execute("""
@@ -1665,7 +1865,10 @@ def my_reservations():
     conn = get_db()
     try:
         events = conn.execute("""
-            SELECT e.*
+            SELECT e.*,
+                   (SELECT COUNT(*) FROM event_reservations active_r
+                    WHERE active_r.event_id = e.id
+                      AND active_r.status = 'reserved') AS reserved_count
             FROM event_reservations r
             JOIN events e ON e.id = r.event_id
             WHERE r.user_id = ? AND r.status = 'reserved'
@@ -2124,9 +2327,56 @@ def event_reserve(event_id):
 
             if action != 'reserve':
                 return '不正な操作です。', 400
-            if not reserved:
-                with conn:
-                    if reservation is None:
+            try:
+                # 予約数の確認と登録を同じ書き込みロック内で行い、定員超過を防ぐ。
+                conn.execute('BEGIN IMMEDIATE')
+                current_event = conn.execute('''
+                    SELECT capacity, datetime, status, review_status
+                    FROM events WHERE id = ?
+                ''', (event_id,)).fetchone()
+                if (
+                    current_event is None
+                    or current_event['status'] != 'open'
+                    or current_event['review_status'] != 'approved'
+                ):
+                    conn.rollback()
+                    return 'イベントが見つからないか、募集を終了しています。', 404
+                try:
+                    if parse_event_datetime(current_event['datetime']) <= datetime.now(JST):
+                        conn.rollback()
+                        return '開催日時を過ぎたイベントは予約できません。', 410
+                except (TypeError, ValueError):
+                    conn.rollback()
+                    return '開催日時を確認できないため、予約を受け付けられません。', 409
+                current_reservation = conn.execute('''
+                    SELECT status FROM event_reservations
+                    WHERE user_id = ? AND event_id = ?
+                ''', (user_id, event_id)).fetchone()
+                current_reserved = (
+                    current_reservation is not None
+                    and current_reservation['status'] == 'reserved'
+                )
+                current_completed = conn.execute('''
+                    SELECT 1 FROM activity_history
+                    WHERE user_id = ? AND event_id = ? AND type = 'event'
+                ''', (user_id, event_id)).fetchone() is not None
+                current_completed = current_completed or (
+                    current_reservation is not None
+                    and current_reservation['status'] == 'completed'
+                )
+                if current_completed:
+                    conn.rollback()
+                    return 'このイベントは参加完了済みです。', 409
+
+                if not current_reserved:
+                    reserved_count = conn.execute('''
+                        SELECT COUNT(*) FROM event_reservations
+                        WHERE event_id = ? AND status = 'reserved'
+                    ''', (event_id,)).fetchone()[0]
+                    if reserved_count >= current_event['capacity']:
+                        conn.rollback()
+                        return '定員に達しています。', 409
+                    if current_reservation is None:
                         conn.execute('''
                             INSERT INTO event_reservations (user_id, event_id)
                             VALUES (?, ?)
@@ -2138,13 +2388,22 @@ def event_reserve(event_id):
                                 completed_at = NULL
                             WHERE user_id = ? AND event_id = ? AND status = 'cancelled'
                         ''', (user_id, event_id))
+                conn.commit()
+            except sqlite3.IntegrityError:
+                conn.rollback()
+                return '予約状態を更新できませんでした。ページを再読み込みしてください。', 409
             return redirect(url_for(
                 'event_reservation_complete', event_id=event_id
             ))
 
+        reserved_count = conn.execute('''
+            SELECT COUNT(*) FROM event_reservations
+            WHERE event_id = ? AND status = 'reserved'
+        ''', (event_id,)).fetchone()[0]
         return render_template(
             'event_reserve.html', event=event,
-            reserved=reserved, completed=completed
+            reserved=reserved, completed=completed,
+            reserved_count=reserved_count,
         )
     finally:
         conn.close()
@@ -2158,7 +2417,7 @@ def event_reservation_complete(event_id):
     try:
         event = conn.execute('''
             SELECT e.id, e.name, e.location, e.datetime, e.status,
-                   e.review_status
+                   e.review_status, e.latitude, e.longitude
             FROM events e
             JOIN event_reservations r ON r.event_id = e.id
             WHERE e.id = ? AND r.user_id = ?
@@ -2168,6 +2427,31 @@ def event_reservation_complete(event_id):
             flash('予約状態を確認できませんでした。予約一覧をご確認ください。', 'info')
             return redirect(url_for('my_reservations'))
         return render_template('event_reservation_complete.html', event=event)
+    finally:
+        conn.close()
+
+
+@app.route('/notifications')
+@user_required
+def user_notifications():
+    user_id = session['user_id']
+    conn = get_db()
+    try:
+        _create_due_event_reminders(conn, user_id)
+        with conn:
+            conn.execute('''
+                UPDATE user_notifications SET read_at = CURRENT_TIMESTAMP
+                WHERE user_id = ? AND read_at IS NULL
+            ''', (user_id,))
+        notifications = conn.execute('''
+            SELECT n.*, e.name AS event_name
+            FROM user_notifications n
+            LEFT JOIN events e ON e.id = n.event_id
+            WHERE n.user_id = ?
+            ORDER BY n.created_at DESC, n.id DESC
+            LIMIT 100
+        ''', (user_id,)).fetchall()
+        return render_template('notifications.html', notifications=notifications)
     finally:
         conn.close()
 
@@ -2188,14 +2472,26 @@ def event_live(event_id):
             return redirect(url_for('event_reserve', event_id=event_id))
         if reservation['status'] == 'completed':
             return redirect(url_for('home'))
-        if parse_event_datetime(event['datetime']) > datetime.now(JST):
+        
+        now = datetime.now(JST)
+        if parse_event_datetime(event['datetime']) > now:
             flash(
                 'イベント開催前のため、活動計測はまだ開始できません。開催日時をご確認ください。',
                 'info',
             )
             return redirect(url_for('event_reserve', event_id=event_id))
-        started_at = datetime.now(JST)
-        session[f'event_started_at_{event_id}'] = started_at.isoformat()
+        
+        # ★ここから修正：古いセッション時刻（12時間以上前など）は破棄して再計測にする
+        started_at_key = f'event_started_at_{event_id}'
+        try:
+            started_at = parse_event_datetime(session.get(started_at_key))
+            elapsed = (now - started_at).total_seconds()
+            if elapsed < 0 or elapsed > EVENT_MAX_SESSION_DURATION_SECONDS:
+                raise ValueError('Session expired')
+        except (TypeError, ValueError):
+            started_at = now
+            session[started_at_key] = started_at.isoformat()
+
         return render_template(
             'event_live.html',
             event=event,
@@ -2238,6 +2534,13 @@ def event_complete(event_id):
         elapsed_seconds = (now - started_at).total_seconds()
     except (TypeError, ValueError):
         return 'イベント参加を開始してから完了してください。', 400
+    if elapsed_seconds < 0:
+        session.pop(f'event_started_at_{event_id}', None)
+        return '計測開始時刻が正しくありません。計測を再開してください。', 400
+    if elapsed_seconds > EVENT_MAX_SESSION_DURATION_SECONDS:
+        session.pop(f'event_started_at_{event_id}', None)
+        flash('計測時間の上限（12時間）を超えました。計測を再開してください。', 'error')
+        return redirect(url_for('event_live', event_id=event_id))
     if elapsed_seconds < duration_val:
         return '実際に経過した時間より長い活動時間は記録できません。', 400
     gps_data = request.form.get('gps_points')
@@ -2309,7 +2612,8 @@ def event_complete(event_id):
         if elapsed_seconds < EVENT_MIN_DURATION_SECONDS:
             conn.close()
             minimum_minutes = EVENT_MIN_DURATION_SECONDS // 60
-            return f'イベント完了には最低{minimum_minutes}分間の活動計測が必要です。', 400
+            flash(f'イベント完了には最低{minimum_minutes}分間の活動計測が必要です。計測を続けてください。', 'error')
+            return redirect(url_for('event_live', event_id=event_id))
         verified_duration = min(int(elapsed_seconds), 86400)
         location_configured = (
             event['latitude'] is not None or event['longitude'] is not None
@@ -2343,12 +2647,12 @@ def event_complete(event_id):
             )
             if not within_event_radius:
                 conn.close()
-                return (
-                    f'完了直前2分以内のイベント地点から'
-                    f'{EVENT_LOCATION_RADIUS_METERS}m以内のGPS位置情報が確認できません。'
-                    '開催地点でGPS計測を行ってください。',
-                    400,
+                flash(
+                    f'完了直前2分以内のイベント地点から{EVENT_LOCATION_RADIUS_METERS}m以内のGPS位置情報を確認できませんでした。'
+                    '開催地点でGPS計測を再開し、位置情報が更新されてから完了してください。',
+                    'error',
                 )
+                return redirect(url_for('event_live', event_id=event_id))
 
         bonus_points = event['bonus_points']
         
@@ -2385,6 +2689,7 @@ def event_complete(event_id):
             conn.execute('UPDATE users SET total_points = total_points + ? WHERE id = ?', (bonus_points, user_id))
             
         activity_id = activity_cursor.lastrowid
+        session.pop(f'event_started_at_{event_id}', None)
         conn.close()
         return redirect(url_for('event_result', activity_id=activity_id))
     except Exception:
@@ -2408,7 +2713,8 @@ def event_result(activity_id):
             WHERE a.id = ? AND a.user_id = ? AND a.type = 'event'
         ''', (activity_id, session['user_id'])).fetchone()
         feedback = conn.execute(
-            'SELECT 1 FROM event_feedback WHERE activity_id = ? AND user_id = ?',
+            '''SELECT action_status, action_note, reviewed_at
+               FROM event_feedback WHERE activity_id = ? AND user_id = ?''',
             (activity_id, session['user_id']),
         ).fetchone()
     finally:
@@ -2432,6 +2738,13 @@ def event_result(activity_id):
     return render_template(
         'event_result.html', activity=activity, event=event,
         feedback_submitted=feedback is not None,
+        feedback_response=feedback,
+        feedback_status_labels={
+            'pending': '確認中',
+            'planned': '対応予定',
+            'addressed': '対応済み',
+            'not_planned': '今回は対応しない',
+        },
     )
 
 
@@ -2518,7 +2831,7 @@ def admin_dashboard():
     try:
         stats = conn.execute('''
             SELECT
-                (SELECT COUNT(*) FROM users) AS users_today,
+                (SELECT COUNT(*) FROM users) AS users_total,
                 (SELECT COUNT(*) FROM ai_logs
                  WHERE date(created_at, '+9 hours') = date('now', '+9 hours')) AS ai_count,
                 (SELECT COUNT(*) FROM ai_logs
@@ -2527,6 +2840,10 @@ def admin_dashboard():
                  WHERE type = 'event' AND date(date, '+9 hours') = date('now', '+9 hours')) AS events_today,
                 (SELECT COUNT(*) FROM events
                  WHERE review_status IN ('pending', 'reviewing')) AS events_pending_review,
+                (SELECT COUNT(*) FROM organizer_applications
+                 WHERE status = 'pending') AS organizer_applications_pending,
+                (SELECT COUNT(*) FROM organizations
+                 WHERE status = 'approved') AS approved_organizations,
                 (SELECT COUNT(*) FROM reward_history
                  WHERE item_id = 'coffee' AND date(created_at, '+9 hours') = date('now', '+9 hours')) AS local_rewards,
                 (SELECT COUNT(*) FROM reward_history
@@ -2537,6 +2854,49 @@ def admin_dashboard():
                  WHERE date(created_at, '+9 hours') = date('now', '+9 hours')) AS total_rewards
         ''').fetchone()
         return render_template('admin_dashboard.html', stats=stats)
+    finally:
+        conn.close()
+
+
+@app.route('/admin/feedback')
+@admin_required
+def admin_feedback():
+    conn = get_db()
+    try:
+        summary = conn.execute('''
+            SELECT COUNT(*) AS responses,
+                   ROUND(AVG(satisfaction), 1) AS average_satisfaction,
+                   SUM(CASE WHEN next_participation = 'yes' THEN 1 ELSE 0 END) AS yes_count,
+                   SUM(CASE WHEN next_participation = 'maybe' THEN 1 ELSE 0 END) AS maybe_count,
+                   SUM(CASE WHEN next_participation = 'no' THEN 1 ELSE 0 END) AS no_count,
+                   SUM(CASE WHEN trim(comment) <> '' THEN 1 ELSE 0 END) AS comment_count
+            FROM event_feedback
+        ''').fetchone()
+        events = conn.execute('''
+            SELECT e.id, e.name, e.datetime, e.location,
+                   COUNT(f.id) AS responses,
+                   ROUND(AVG(f.satisfaction), 1) AS average_satisfaction,
+                   SUM(CASE WHEN f.next_participation = 'yes' THEN 1 ELSE 0 END) AS yes_count,
+                   SUM(CASE WHEN f.next_participation = 'maybe' THEN 1 ELSE 0 END) AS maybe_count,
+                   SUM(CASE WHEN f.next_participation = 'no' THEN 1 ELSE 0 END) AS no_count
+            FROM events e
+            JOIN event_feedback f ON f.event_id = e.id
+            GROUP BY e.id
+            ORDER BY MAX(f.submitted_at) DESC, e.id DESC
+        ''').fetchall()
+        comments = conn.execute('''
+            SELECT f.comment, f.satisfaction, f.next_participation,
+                   f.submitted_at, e.id AS event_id, e.name AS event_name
+            FROM event_feedback f
+            JOIN events e ON e.id = f.event_id
+            WHERE trim(f.comment) <> ''
+            ORDER BY f.submitted_at DESC, f.id DESC
+            LIMIT 30
+        ''').fetchall()
+        return render_template(
+            'admin_feedback.html', summary=summary,
+            events=events, comments=comments,
+        )
     finally:
         conn.close()
 
@@ -3683,56 +4043,22 @@ def review_event(event_id):
 def organizer_apply():
     user_id = session['user_id']
     conn = get_db()
-    error_msg = None
-    form_values = {
-        'organization_name': '',
-        'contact': '',
-        'purpose': '',
-    }
     try:
         application = conn.execute('''
             SELECT * FROM organizer_applications
             WHERE user_id = ? ORDER BY id DESC LIMIT 1
         ''', (user_id,)).fetchone()
-
+        if application is None:
+            flash('団体利用の申請は、今後アカウント登録時に受け付けます。', 'info')
+            return redirect(url_for('home'))
+        if application['status'] == 'approved':
+            return redirect(url_for('organizer_dashboard'))
+        if application['status'] == 'rejected':
+            flash('団体申請は承認されませんでした。登録方法について管理者にお問い合わせください。', 'info')
+            return redirect(url_for('home'))
         if request.method == 'POST':
-            if not validate_csrf():
-                return 'CSRFトークンが不正です。', 400
-            if application and application['status'] in ('pending', 'approved'):
-                return '申請中または承認済みのため、申請できません。', 409
-
-            form_values = {
-                'organization_name': request.form.get('organization_name', '').strip(),
-                'contact': request.form.get('contact', '').strip(),
-                'purpose': request.form.get('purpose', '').strip(),
-            }
-            organization_name = form_values['organization_name']
-            contact = form_values['contact']
-            purpose = form_values['purpose']
-            if not organization_name or len(organization_name) > 100:
-                form_values['organization_name'] = ''
-                error_msg = '団体名を1〜100文字で入力してください。'
-            elif not contact or len(contact) > 200:
-                form_values['contact'] = ''
-                error_msg = '連絡先を1〜200文字で入力してください。'
-            elif not purpose or len(purpose) > 1000:
-                form_values['purpose'] = ''
-                error_msg = '活動内容を1〜1000文字で入力してください。'
-            else:
-                with conn:
-                    conn.execute('''
-                        INSERT INTO organizer_applications (
-                            user_id, organization_name, contact, purpose
-                        ) VALUES (?, ?, ?, ?)
-                    ''', (user_id, organization_name, contact, purpose))
-                return redirect(url_for('organizer_apply'))
-
-        return render_template(
-            'organizer_apply.html',
-            application=application,
-            error_msg=error_msg,
-            form_values=form_values,
-        )
+            return '申請を受け付けています。審査結果をお待ちください。', 409
+        return render_template('organizer_apply.html', application=application)
     finally:
         conn.close()
 
@@ -3817,6 +4143,7 @@ def _validated_event_form(require_reward_details=False):
     location = request.form.get('location', '').strip()
     event_datetime = request.form.get('datetime', '').strip()
     raw_bonus = request.form.get('bonus_points', '').strip()
+    raw_capacity = request.form.get('capacity', '').strip()
     reward_details = request.form.get('reward_details', '').strip()
     raw_latitude = request.form.get('latitude', '').strip()
     raw_longitude = request.form.get('longitude', '').strip()
@@ -3828,6 +4155,7 @@ def _validated_event_form(require_reward_details=False):
         'longitude': raw_longitude,
         'datetime': event_datetime,
         'bonus_points': raw_bonus,
+        'capacity': raw_capacity,
         'reward_details': reward_details,
         'category': category_input,
     }
@@ -3847,6 +4175,14 @@ def _validated_event_form(require_reward_details=False):
     except ValueError:
         submitted_values['bonus_points'] = ''
         return submitted_values, 'ボーナスポイントを整数で入力してください。'
+    if raw_capacity:
+        try:
+            capacity = int(raw_capacity)
+        except ValueError:
+            submitted_values['capacity'] = ''
+            return submitted_values, '定員を整数で入力してください。'
+    else:
+        capacity = 20
     latitude = longitude = None
     if bool(raw_latitude) != bool(raw_longitude):
         submitted_values['latitude' if raw_latitude else 'longitude'] = ''
@@ -3878,6 +4214,9 @@ def _validated_event_form(require_reward_details=False):
     if bonus_points < 0 or bonus_points > 1000:
         submitted_values['bonus_points'] = ''
         return submitted_values, 'ボーナスポイントは0〜1000の範囲で指定してください。'
+    if capacity < 1 or capacity > 10000:
+        submitted_values['capacity'] = ''
+        return submitted_values, '定員は1〜10000人の範囲で入力してください。'
     if require_reward_details and not reward_details:
         return submitted_values, '参加者向け特典を入力してください。特典がない場合は「なし」と入力してください。'
     if len(reward_details) > 500:
@@ -3897,6 +4236,7 @@ def _validated_event_form(require_reward_details=False):
         'longitude': longitude,
         'datetime': parsed_datetime.strftime('%Y-%m-%d %H:%M'),
         'bonus_points': bonus_points,
+        'capacity': capacity,
         'reward_details': reward_details,
         'category': category,
     }, None
@@ -3984,10 +4324,41 @@ def organizer_dashboard():
                     WHERE a.event_id = e.id
                 )
         ''', (organization_id,)).fetchone()[0]
+        active_reservations = conn.execute('''
+            SELECT COUNT(*)
+            FROM event_reservations r
+            JOIN events e ON e.id = r.event_id
+            WHERE e.organization_id = ? AND r.status = 'reserved'
+        ''', (organization_id,)).fetchone()[0]
+        participant_count = conn.execute('''
+            SELECT COUNT(*)
+            FROM activity_history a
+            JOIN events e ON e.id = a.event_id
+            WHERE e.organization_id = ? AND a.type = 'event'
+        ''', (organization_id,)).fetchone()[0]
+        pending_feedback_count = conn.execute('''
+            SELECT COUNT(*)
+            FROM event_feedback f
+            JOIN events e ON e.id = f.event_id
+            WHERE e.organization_id = ? AND f.action_status = 'pending'
+        ''', (organization_id,)).fetchone()[0]
+        recent_feedback = conn.execute('''
+            SELECT f.event_id, f.comment, f.satisfaction, f.submitted_at,
+                   e.name AS event_name
+            FROM event_feedback f
+            JOIN events e ON e.id = f.event_id
+            WHERE e.organization_id = ? AND f.action_status = 'pending'
+            ORDER BY f.submitted_at DESC, f.id DESC
+            LIMIT 5
+        ''', (organization_id,)).fetchall()
         return render_template(
             'organizer_dashboard.html',
             event_count=event_count,
             editable_event_count=editable_event_count,
+            active_reservations=active_reservations,
+            participant_count=participant_count,
+            pending_feedback_count=pending_feedback_count,
+            recent_feedback=recent_feedback,
         )
     finally:
         conn.close()
@@ -4095,6 +4466,48 @@ def organizer_event_participants(event_id):
     finally:
         conn.close()
 
+@app.route('/organizer/events/<int:event_id>/message', methods=['POST'])
+@organizer_required
+def organizer_event_message(event_id):
+    if not validate_csrf():
+        return 'CSRFトークンが不正です。', 400
+    message = (request.form.get('message') or '').strip()
+    if not message or len(message) > 1000:
+        flash('メッセージを1〜1000文字で入力してください。', 'error')
+        return redirect(url_for('organizer_event_participants', event_id=event_id))
+
+    conn = get_db()
+    try:
+        organization_id = get_user_organization_id(conn, session['user_id'])
+        event = conn.execute('''
+            SELECT id, name, status FROM events
+            WHERE id = ? AND organization_id = ?
+        ''', (event_id, organization_id)).fetchone()
+        if event is None:
+            return 'イベントが見つかりません。', 404
+        if event['status'] != 'open':
+            return '中止済みのイベントにはメッセージを送れません。', 409
+        with conn:
+            cursor = conn.execute('''
+                INSERT INTO user_notifications (
+                    user_id, event_id, notification_type, title, message
+                )
+                SELECT r.user_id, ?, 'organizer_message', ?, ?
+                FROM event_reservations r
+                WHERE r.event_id = ? AND r.status = 'reserved'
+            ''', (
+                event_id, f'主催者からのお知らせ：{event["name"]}', message,
+                event_id,
+            ))
+        if cursor.rowcount:
+            flash(f'{cursor.rowcount}人の予約者にお知らせを送りました。', 'success')
+        else:
+            flash('現在お知らせを受け取る予約者はいません。', 'info')
+        return redirect(url_for('organizer_event_participants', event_id=event_id))
+    finally:
+        conn.close()
+
+
 @app.route('/organizer/events/<int:event_id>/feedback/<int:feedback_id>', methods=['POST'])
 @organizer_required
 def organizer_event_feedback_update(event_id, feedback_id):
@@ -4140,7 +4553,9 @@ def organizer_event_new():
     if request.method == 'POST':
         if not validate_csrf():
             return 'CSRFトークンが不正です。', 400
-        submitted_values, error_msg = _validated_event_form(require_reward_details=True)
+        submitted_values, error_msg = _validated_event_form(
+            require_reward_details=True
+        )
         event_values.update(submitted_values)
         if not error_msg:
             conn = get_db()
@@ -4149,18 +4564,20 @@ def organizer_event_new():
                     conn, session['user_id']
                 )
                 if not organization_id:
-                    return redirect(url_for('organizer_apply'))
+                    flash('団体機能は、審査で承認された団体メンバーのみ利用できます。', 'info')
+                    return redirect(url_for('home'))
                 with conn:
                     conn.execute('''
                         INSERT INTO events (
                             name, location, latitude, longitude, datetime,
-                            bonus_points, reward_details, review_status,
+                            bonus_points, capacity, reward_details, review_status,
                             organizer_id, organization_id, category
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
                     ''', (
                         event_values['name'], event_values['location'],
                         event_values['latitude'], event_values['longitude'],
                         event_values['datetime'], event_values['bonus_points'],
+                        event_values['capacity'],
                         event_values['reward_details'],
                         session['user_id'], organization_id,
                         event_values['category'],
@@ -4204,14 +4621,16 @@ def organizer_event_edit(event_id):
         if request.method == 'POST':
             if not validate_csrf():
                 return 'CSRFトークンが不正です。', 400
-            submitted_values, error_msg = _validated_event_form(require_reward_details=True)
+            submitted_values, error_msg = _validated_event_form(
+                require_reward_details=True
+            )
             event_values.update(submitted_values)
             if not error_msg:
                 with conn:
                     conn.execute('''
                         UPDATE events
                         SET name = ?, location = ?, latitude = ?, longitude = ?,
-                            datetime = ?, bonus_points = ?,
+                            datetime = ?, bonus_points = ?, capacity = ?,
                             reward_details = ?, category = ?,
                             review_status = 'pending', review_comment = NULL,
                             reviewed_by = NULL, reviewed_at = NULL
@@ -4220,6 +4639,7 @@ def organizer_event_edit(event_id):
                         event_values['name'], event_values['location'],
                         event_values['latitude'], event_values['longitude'],
                         event_values['datetime'], event_values['bonus_points'],
+                        event_values['capacity'],
                         event_values['reward_details'],
                         event_values['category'],
                         event_id, organization_id,
@@ -4242,6 +4662,24 @@ def organizer_event_cancel(event_id):
     try:
         organization_id = get_user_organization_id(conn, session['user_id'])
         with conn:
+            event = conn.execute('''
+                SELECT name FROM events
+                WHERE id = ? AND organization_id = ? AND status = 'open'
+            ''', (event_id, organization_id)).fetchone()
+            if event is None:
+                return 'イベントが見つからないか、すでに中止されています。', 404
+            conn.execute('''
+                INSERT INTO user_notifications (
+                    user_id, event_id, notification_type, title, message
+                )
+                SELECT user_id, event_id, 'cancellation', ?, ?
+                FROM event_reservations
+                WHERE event_id = ? AND status = 'reserved'
+            ''', (
+                f'イベント中止のお知らせ：{event["name"]}',
+                f'主催者の都合により「{event["name"]}」は中止になりました。',
+                event_id,
+            ))
             cursor = conn.execute('''
                 UPDATE events SET status = 'cancelled'
                 WHERE id = ? AND organization_id = ? AND status = 'open'
