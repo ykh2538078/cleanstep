@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>ご利用ガイド | CleanStep</title>
+    <style>
+        body { margin: 0; background: #f4f7f6; color: #263238; font-family: "Yu Gothic", Meiryo, sans-serif; line-height: 1.7; }
+        main { max-width: 900px; margin: 24px auto; padding: 60px 16px 32px; }
+        h1 { margin-bottom: 8px; color: #2c3e50; }
+        .lead { margin-top: 0; color: #566573; }
+        .guide-section { margin: 18px 0; padding: 20px; border: 1px solid #dce5e1; border-radius: 10px; background: #fff; }
+        .guide-section h2 { margin: 0 0 10px; color: #17633f; font-size: 19px; }
+        .guide-section p { margin: 8px 0; }
+        .guide-section ol { margin-bottom: 0; padding-left: 1.5rem; }
+        .notice { padding: 12px 14px; border-left: 4px solid #3498db; border-radius: 6px; background: #edf5fb; }
+        .guide-links { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 20px; }
+        .guide-links a { display: inline-flex; min-height: 44px; align-items: center; padding: 0 16px; border-radius: 8px; background: #2ecc71; color: #fff; font-weight: 700; text-decoration: none; }
+        @media (max-width: 600px) {
+            main { margin: 14px auto; padding: 60px 12px 24px; }
+            .guide-section { padding: 16px; }
+            .guide-links { display: grid; }
+            .guide-links a { justify-content: center; }
+        }
+    </style>
+</head>
+<body>
+    {% include "_user_navigation.html" %}
+    <main>
+        <h1>ご利用ガイド</h1>
+        <p class="lead">ごみ回収や地域イベントへの参加方法をご案内します。</p>
+
+        <section class="guide-section">
+            <h2>1. ごみを撮影してAI判定</h2>
+            <ol>
+                <li>ホームから「エコごみ箱を開く」を選択します。</li>
+                <li>回収場所とごみの個数を選び、対象のごみが写った写真を送信します。</li>
+                <li>AIの画像判定が完了すると、判定結果と活動記録が表示されます。</li>
+            </ol>
+            <p class="notice">ごみ回収のポイントは、自己申告数ではなくAIの検出数を基準に計算されます。同じ画像の重複登録にはポイントが付与されません。</p>
+        </section>
+
+        <section class="guide-section">
+            <h2>2. 地域イベントへの参加</h2>
+            <ol>
+                <li>イベント一覧から内容を確認し、参加するイベントを予約します。</li>
+                <li>開催日時以降に予約内容を開き、現地で活動計測を開始します。</li>
+                <li>最低15分間計測してから完了すると、参加記録とイベントポイントが登録されます。</li>
+            </ol>
+            <p class="notice">イベントに開催地点が設定されている場合、完了時に端末から送信されたGPS位置情報を使って地点を確認します。これは参考確認であり、実際の位置を保証するものではありません。GPSの距離・歩数・カロリーは参考値です。</p>
+        </section>
+
+        <section class="guide-section">
+            <h2>3. ポイントと活動実績</h2>
+            <p>保有ポイントはホームで確認できます。活動実績では、回収記録やイベント参加の履歴、月ごとの活動状況を確認できます。</p>
+            <p>特典交換の内容や利用条件は、交換画面でご確認ください。</p>
+        </section>
+
+        <nav class="guide-links" aria-label="関連ページ">
+            <a href="{{ url_for('home') }}">ホームへ戻る</a>
+            <a href="{{ url_for('all_events') }}">イベント一覧を見る</a>
+            <a href="{{ url_for('trash_bin') }}">ごみ回収を開始する</a>
+        </nav>
+    </main>
+</body>
+</html>
