@@ -4499,96 +4499,51 @@ if __name__ == '__main__':
 
     app.run(host=host, debug=debug_mode, port=5005)
 
-def start_cloudflare_tunnel():
-    """
-    Start Cloudflare Tunnel, print URL,
-    generate terminal QR and QR image.
-    """
+def generate_qr():
+    public_url = "http://cleanstep.duckdns.org:5000"
 
-    print("\nStarting Cloudflare Tunnel...\n")
+    print("\n" + "=" * 60)
+    print("📱 PUBLIC URL")
+    print(public_url)
+    print("=" * 60)
 
-    try:
-        proc = subprocess.Popen(
-            [
-                "cloudflared",
-                "tunnel",
-                "--url",
-                "http://localhost:5000",
-            ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
+    qr = qrcode.QRCode(border=4)
+    qr.add_data(public_url)
+    qr.make(fit=True)
+
+    print("\nScan this QR code:\n")
+
+    esc = "\x1b["
+
+    for row in qr.get_matrix():
+        qr_line = "".join(
+            f"{esc}{40 if dark else 47}m "
+            for dark in row
         )
+        print(qr_line + f"{esc}0m")
 
-        for line in proc.stdout:
-            print(line, end="")
+    os.makedirs(app.static_folder, exist_ok=True)
 
-            match = re.search(
-                r"https://[-a-zA-Z0-9.]+\.trycloudflare\.com",
-                line,
-            )
+    qr_path = os.path.join(
+        app.static_folder,
+        "cleanstep_qr.png",
+    )
 
-            if not match:
-                continue
+    qr.make_image(
+        fill_color="black",
+        back_color="white",
+    ).save(qr_path)
 
-            public_url = match.group(0)
-
-            print("\n" + "=" * 60)
-            print("📱 PUBLIC URL")
-            print(public_url)
-            print("=" * 60)
-
-            qr = qrcode.QRCode(border=4)
-            qr.add_data(public_url)
-            qr.make(fit=True)
-
-            print("\nScan this QR code:\n")
-
-            esc = "\x1b["
-
-            for row in qr.get_matrix():
-                qr_line = "".join(
-                    f"{esc}{40 if dark else 47}m  "
-                    for dark in row
-                )
-                print(qr_line + f"{esc}0m")
-
-            os.makedirs(app.static_folder, exist_ok=True)
-
-            qr_path = os.path.join(
-                app.static_folder,
-                "cloudflare_qr.png",
-            )
-
-            qr.make_image(
-                fill_color="black",
-                back_color="white",
-            ).save(qr_path)
-
-            print("\nQR image saved to:")
-            print(qr_path)
-
-            break
-
-    except FileNotFoundError:
-        print("\nERROR: cloudflared not found.")
-        print(
-            "Install Cloudflare Tunnel and ensure "
-            "'cloudflared' is available in PATH."
-        )
-
-    except Exception as e:
-        print(f"\nTunnel startup failed: {e}")
-
+    print("\nQR image saved to:")
+    print(qr_path)
 
 # --------------------------------------------------
 # Place this at the very bottom of app.py
 # --------------------------------------------------
 
-print("Starting tunnel thread...")
+print("Generating QR Code...")
 
 threading.Thread(
-    target=start_cloudflare_tunnel,
+    target=generate_qr,
     daemon=True,
 ).start()
