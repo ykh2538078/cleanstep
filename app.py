@@ -1113,7 +1113,19 @@ def organizer_required(func):
 def validate_csrf():
     expected = session.get('csrf_token')
     submitted = request.form.get('csrf_token', '')
-    return bool(expected and hmac.compare_digest(expected, submitted))
+    ok = bool(expected and hmac.compare_digest(expected, submitted))
+    if not ok:
+        reason = (
+            'セッションCookieが届いていない/読めない' if not expected
+            else 'フォームにトークンが無い' if not submitted
+            else 'トークン不一致（古いページ）'
+        )
+        app.logger.warning(
+            'CSRF失敗 %s %s: %s (cookie送信=%s, Flaskから見たhttps=%s, host=%s)',
+            request.method, request.path, reason,
+            'session' in request.cookies, request.is_secure, request.host,
+        )
+    return ok
 
 
 VERIFICATION_DATA_TYPES = {
