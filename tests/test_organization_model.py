@@ -10,7 +10,7 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
@@ -261,6 +261,7 @@ class OrganizationModelTests(unittest.TestCase):
         response = self.client.get('/home')
 
         self.assertEqual(response.status_code, 200)
+        self.assertNotIn('団体ダッシュボードを開く'.encode(), response.data)
         self.assertIn('活動フィードバック'.encode(), response.data)
         self.assertIn('おすすめの活動スケジュール'.encode(), response.data)
         self.assertIn('次回参加予定'.encode(), response.data)
@@ -669,6 +670,11 @@ class OrganizationModelTests(unittest.TestCase):
             before_other_user = conn.execute(
                 'SELECT total_points FROM users WHERE id = 3'
             ).fetchone()
+            before_notifications = conn.execute('''
+                SELECT COUNT(*) FROM user_notifications
+                WHERE user_id = 1 AND notification_type = 'activity_completed'
+                  AND event_id IS NULL
+            ''').fetchone()[0]
 
         class DetectedBox:
             cls = 39
@@ -689,6 +695,7 @@ class OrganizationModelTests(unittest.TestCase):
 
         log_id = None
         activity_id = None
+        notification_id = None
         self._login_as(1)
         with tempfile.TemporaryDirectory() as upload_dir:
             try:
@@ -707,6 +714,22 @@ class OrganizationModelTests(unittest.TestCase):
                             content_type='multipart/form-data',
                         )
                         self.assertEqual(response.status_code, 302)
+                        with database_connection() as conn:
+                            notification_count = conn.execute('''
+                                SELECT COUNT(*) FROM user_notifications
+                                WHERE user_id = 1
+                                  AND notification_type = 'activity_completed'
+                                  AND event_id IS NULL
+                            ''').fetchone()[0]
+                            notification = conn.execute('''
+                                SELECT id FROM user_notifications
+                                WHERE user_id = 1
+                                  AND notification_type = 'activity_completed'
+                                  AND event_id IS NULL
+                                ORDER BY id DESC LIMIT 1
+                            ''').fetchone()
+                            notification_id = notification['id']
+                        self.assertEqual(notification_count, before_notifications + 1)
                         self._login_as(3)
                         response = self.client.post(
                             '/trash-bin/deposit',
@@ -743,6 +766,10 @@ class OrganizationModelTests(unittest.TestCase):
                             SELECT COUNT(*) FROM activity_history
                             WHERE id = ?
                         ''', (activity_id,)).fetchone()[0]
+                        completion_notification = conn.execute('''
+                            SELECT notification_type FROM user_notifications
+                            WHERE id = ?
+                        ''', (notification_id,)).fetchone()
                     self.assertEqual(original['detected_count'], 2)
                     self.assertRegex(original['image_sha256'], r'^[0-9a-f]{64}$')
                     self.assertEqual(user_points, before_user['total_points'] + 10)
@@ -751,6 +778,10 @@ class OrganizationModelTests(unittest.TestCase):
                     )
                     self.assertEqual(attempts, 1)
                     self.assertEqual(activity_count, 1)
+                    self.assertEqual(
+                        completion_notification['notification_type'],
+                        'activity_completed',
+                    )
 
                     self._login_as(2, 'admin')
                     response = self.client.get('/admin/ai/flags')
@@ -772,6 +803,11 @@ class OrganizationModelTests(unittest.TestCase):
                         conn.execute(
                             'DELETE FROM activity_history WHERE id = ?',
                             (activity_id,),
+                        )
+                    if notification_id is not None:
+                        conn.execute(
+                            'DELETE FROM user_notifications WHERE id = ?',
+                            (notification_id,),
                         )
                     conn.execute(
                         'UPDATE users SET total_points = ? WHERE id = ?',
@@ -1971,6 +2007,12 @@ class OrganizationModelTests(unittest.TestCase):
             ''').fetchone()
         event_id = event["id"]
         self.assertEqual(event["review_status"], "pending")
+        with database_connection() as conn:
+            pending_notifications = conn.execute('''
+                SELECT COUNT(*) FROM user_notifications
+                WHERE event_id = ? AND notification_type = 'event_added'
+            ''', (event_id,)).fetchone()[0]
+        self.assertEqual(pending_notifications, 0)
 
         self._login_as(1)
         response = self.client.get("/home")
@@ -2050,20 +2092,71 @@ class OrganizationModelTests(unittest.TestCase):
             event = conn.execute(
                 'SELECT review_status FROM events WHERE id = ?', (event_id,)
             ).fetchone()
+            notification_count = conn.execute('''
+                SELECT COUNT(*) FROM user_notifications
+                WHERE event_id = ? AND notification_type = 'event_added'
+            ''', (event_id,)).fetchone()[0]
+            user_count = conn.execute(
+                "SELECT COUNT(*) FROM users WHERE role = 'user'"
+            ).fetchone()[0]
         self.assertEqual(event["review_status"], "approved")
+        self.assertEqual(notification_count, user_count)
 
         self._login_as(1)
         response = self.client.get("/events")
         self.assertIn(b"Review Workflow Event Updated", response.data)
+        response = self.client.get("/notifications")
+        self.assertIn('新しいイベント：Review Workflow Event Updated'.encode(), response.data)
         response = self.client.get(f"/event/reserve/{event_id}")
         self.assertEqual(response.status_code, 200)
         with database_connection() as conn:
+            conn.execute(
+                "DELETE FROM user_notifications WHERE event_id = ?",
+                (event_id,),
+            )
             conn.execute('DELETE FROM events WHERE id = ?', (event_id,))
             if not membership_exists:
                 conn.execute('''
                     DELETE FROM organization_members
                     WHERE organization_id = ? AND user_id = 4
                 ''', (organization_id,))
+
+    def test_admin_added_event_notifies_all_users(self):
+        event_datetime = (
+            datetime.now(cleanstep.JST) + timedelta(days=30)
+        ).replace(second=0, microsecond=0).strftime('%Y-%m-%dT%H:%M')
+        self._login_as(2, 'admin')
+
+        response = self.client.post(
+            '/admin/events/add',
+            data={
+                'csrf_token': 'test-csrf-token',
+                'name': 'Admin Added Notification Event',
+                'location': 'Community Park',
+                'datetime': event_datetime,
+                'bonus_points': '20',
+                'category': 'auto',
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+
+        with database_connection() as conn:
+            event = conn.execute('''
+                SELECT id FROM events WHERE name = ?
+            ''', ('Admin Added Notification Event',)).fetchone()
+            notification_count = conn.execute('''
+                SELECT COUNT(*) FROM user_notifications
+                WHERE event_id = ? AND notification_type = 'event_added'
+            ''', (event['id'],)).fetchone()[0]
+            user_count = conn.execute(
+                "SELECT COUNT(*) FROM users WHERE role = 'user'"
+            ).fetchone()[0]
+            conn.execute(
+                'DELETE FROM user_notifications WHERE event_id = ?',
+                (event['id'],),
+            )
+            conn.execute('DELETE FROM events WHERE id = ?', (event['id'],))
+        self.assertEqual(notification_count, user_count)
 
     def test_event_feedback_submission_and_organizer_reflection_flow(self):
         with database_connection() as conn:
@@ -2242,6 +2335,85 @@ class OrganizationModelTests(unittest.TestCase):
                 conn.execute('DELETE FROM user_notifications WHERE event_id = ?', (event_id,))
                 conn.execute('DELETE FROM event_reservations WHERE event_id = ?', (event_id,))
                 conn.execute('DELETE FROM events WHERE id = ?', (event_id,))
+
+    def test_notifications_are_read_only_when_opened_and_can_be_marked_read(self):
+        user_id = None
+        event_id = None
+        with database_connection() as conn:
+            user_id = conn.execute(
+                'SELECT COALESCE(MAX(id), 0) + 100 FROM users'
+            ).fetchone()[0]
+            conn.execute('''
+                INSERT INTO users (id, email, password, name, role, total_points)
+                VALUES (?, ?, '', 'Notification Tester', 'user', 0)
+            ''', (user_id, f'notification-{user_id}@example.test'))
+            event_datetime = (
+                datetime.now(cleanstep.JST) + timedelta(days=10)
+            ).strftime('%Y-%m-%d %H:%M')
+            event_id = conn.execute('''
+                INSERT INTO events (
+                    name, location, datetime, bonus_points, status, review_status
+                ) VALUES (
+                    'Notification Read Test', 'Test Location', ?, 0, 'open', 'approved'
+                )
+            ''', (event_datetime,)).lastrowid
+            conn.executemany('''
+                INSERT INTO user_notifications (
+                    user_id, event_id, notification_type, title, message
+                ) VALUES (?, ?, ?, ?, ?)
+            ''', [
+                (user_id, event_id, 'organizer_message', '個別既読テスト', 'イベントのお知らせ'),
+                (user_id, event_id, 'cancellation', '全件既読テスト', '確認用通知'),
+            ])
+
+        try:
+            self._login_as(user_id)
+            response = self.client.get('/notifications')
+            self.assertEqual(response.status_code, 200)
+            self.assertIn('すべて既読にする'.encode(), response.data)
+            self.assertEqual(response.data.count(b'class="notification unread"'), 2)
+
+            with database_connection() as conn:
+                notifications = conn.execute('''
+                    SELECT id, read_at FROM user_notifications
+                    WHERE user_id = ? ORDER BY id
+                ''', (user_id,)).fetchall()
+            self.assertEqual(len(notifications), 2)
+            self.assertTrue(all(notification['read_at'] is None for notification in notifications))
+
+            response = self.client.post(
+                f"/notifications/{notifications[0]['id']}/open",
+                data={'csrf_token': 'test-csrf-token'},
+            )
+            self.assertEqual(response.status_code, 302)
+            self.assertEqual(response.location, f'/event/reserve/{event_id}')
+            with database_connection() as conn:
+                read_states = conn.execute('''
+                    SELECT read_at FROM user_notifications
+                    WHERE user_id = ? ORDER BY id
+                ''', (user_id,)).fetchall()
+            self.assertIsNotNone(read_states[0]['read_at'])
+            self.assertIsNone(read_states[1]['read_at'])
+
+            response = self.client.post(
+                '/notifications/read-all',
+                data={'csrf_token': 'test-csrf-token'},
+            )
+            self.assertEqual(response.status_code, 302)
+            response = self.client.get('/notifications')
+            self.assertNotIn('すべて既読にする'.encode(), response.data)
+            with database_connection() as conn:
+                unread_count = conn.execute('''
+                    SELECT COUNT(*) FROM user_notifications
+                    WHERE user_id = ? AND read_at IS NULL
+                ''', (user_id,)).fetchone()[0]
+            self.assertEqual(unread_count, 0)
+        finally:
+            with database_connection() as conn:
+                conn.execute('DELETE FROM user_notifications WHERE user_id = ?', (user_id,))
+                conn.execute('DELETE FROM event_reservations WHERE event_id = ?', (event_id,))
+                conn.execute('DELETE FROM events WHERE id = ?', (event_id,))
+                conn.execute('DELETE FROM users WHERE id = ?', (user_id,))
 
     def test_organizer_participant_list_is_scoped_to_organization(self):
         with database_connection() as conn:
@@ -2987,7 +3159,14 @@ class OrganizationModelTests(unittest.TestCase):
                 SELECT status FROM event_reservations
                 WHERE user_id = 1 AND event_id = 1
             ''').fetchone()
+            reservation_notification = conn.execute('''
+                SELECT notification_type FROM user_notifications
+                WHERE user_id = 1 AND event_id = 1
+                  AND notification_type = 'reservation'
+                ORDER BY id DESC LIMIT 1
+            ''').fetchone()
         self.assertEqual(reservation["status"], "reserved")
+        self.assertIsNotNone(reservation_notification)
         home_response = self.client.get("/home")
         self.assertIn("次回参加予定".encode(), home_response.data)
         self.assertIn("予約したイベント（1件）".encode(), home_response.data)
@@ -3010,6 +3189,17 @@ class OrganizationModelTests(unittest.TestCase):
                 SELECT status FROM event_reservations
                 WHERE user_id = 1 AND event_id = 1
             ''').fetchone()
+            cancellation_notification = conn.execute('''
+                SELECT notification_type FROM user_notifications
+                WHERE user_id = 1 AND event_id = 1
+                  AND notification_type = 'reservation_cancelled'
+                ORDER BY id DESC LIMIT 1
+            ''').fetchone()
+            conn.execute('''
+                DELETE FROM user_notifications
+                WHERE user_id = 1 AND event_id = 1
+                  AND notification_type IN ('reservation', 'reservation_cancelled')
+            ''')
             conn.execute(
                 'DELETE FROM event_reservations WHERE user_id = 1 AND event_id = 1'
             )
@@ -3017,6 +3207,7 @@ class OrganizationModelTests(unittest.TestCase):
                 "UPDATE events SET datetime = '2035-01-01 10:00' WHERE id = 1"
             )
         self.assertEqual(reservation["status"], "cancelled")
+        self.assertIsNotNone(cancellation_notification)
         home_response = self.client.get("/home")
         self.assertIn("予約したイベント（0件）".encode(), home_response.data)
         self.assertIn("現在、予約中のイベントはありません".encode(), home_response.data)
@@ -3230,6 +3421,20 @@ class OrganizationModelTests(unittest.TestCase):
         self.assertIn("未計測", result_page)
 
         with database_connection() as conn:
+            completion_notification = conn.execute('''
+                SELECT notification_type FROM user_notifications
+                WHERE user_id = 1 AND event_id = 1
+                  AND notification_type = 'activity_completed'
+                ORDER BY id DESC LIMIT 1
+            ''').fetchone()
+        self.assertIsNotNone(completion_notification)
+
+        with database_connection() as conn:
+            conn.execute('''
+                DELETE FROM user_notifications
+                WHERE user_id = 1 AND event_id = 1
+                  AND notification_type = 'activity_completed'
+            ''')
             conn.execute(
                 'DELETE FROM activity_history WHERE user_id = 1 AND event_id = 1'
             )
@@ -3279,6 +3484,20 @@ class OrganizationModelTests(unittest.TestCase):
         self.assertIn("/event/result/", response.location)
 
         with database_connection() as conn:
+            completion_notification = conn.execute('''
+                SELECT notification_type FROM user_notifications
+                WHERE user_id = 1 AND event_id = 1
+                  AND notification_type = 'activity_completed'
+                ORDER BY id DESC LIMIT 1
+            ''').fetchone()
+        self.assertIsNotNone(completion_notification)
+
+        with database_connection() as conn:
+            conn.execute('''
+                DELETE FROM user_notifications
+                WHERE user_id = 1 AND event_id = 1
+                  AND notification_type = 'activity_completed'
+            ''')
             conn.execute(
                 'DELETE FROM activity_history WHERE user_id = 1 AND event_id = 1'
             )
@@ -3311,6 +3530,108 @@ class OrganizationModelTests(unittest.TestCase):
             cleanstep.format_event_datetime('2026-11-06T00:00:00+00:00'),
             '2026-11-06 09:00',
         )
+
+    def test_database_initialization_seeds_missing_events_without_duplicates(self):
+        default_event_names = (
+            'みなとみらい清掃イベント',
+            '湘南海岸ビーチ清掃イベント',
+            '渋谷ハロウィン翌朝ごみゼロ運動',
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database_path = Path(temp_dir) / 'seed-events.db'
+            original_database = cleanstep.DATABASE
+            cleanstep.DATABASE = str(database_path)
+            try:
+                with patch.dict(os.environ, {'CLEANSTEP_DEMO_MODE': 'false'}):
+                    cleanstep.init_db()
+                    with closing(sqlite3.connect(database_path)) as conn:
+                        conn.execute('DELETE FROM events')
+                        conn.execute('''
+                            INSERT INTO events (
+                                name, location, datetime, bonus_points, category
+                            ) VALUES (
+                                'Existing event', 'Test location',
+                                '2030-01-01 10:00', 0, 'その他'
+                            )
+                        ''')
+                        conn.commit()
+
+                    cleanstep.init_db()
+                    cleanstep.init_db()
+
+                    with closing(sqlite3.connect(database_path)) as conn:
+                        for name in default_event_names:
+                            count = conn.execute(
+                                'SELECT COUNT(*) FROM events WHERE name = ?',
+                                (name,),
+                            ).fetchone()[0]
+                            self.assertEqual(count, 1, name)
+                        self.assertEqual(
+                            conn.execute('SELECT COUNT(*) FROM events').fetchone()[0],
+                            len(default_event_names) + 1,
+                        )
+            finally:
+                cleanstep.DATABASE = original_database
+
+    def test_notification_type_migration_preserves_existing_notifications(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database_path = Path(temp_dir) / 'legacy-notifications.db'
+            shutil.copy2(cleanstep.DATABASE, database_path)
+            with closing(sqlite3.connect(database_path)) as conn:
+                conn.execute('DROP INDEX IF EXISTS idx_user_notifications_reminder_once')
+                conn.execute('DROP INDEX IF EXISTS idx_user_notifications_user_unread')
+                conn.execute(
+                    'ALTER TABLE user_notifications RENAME TO user_notifications_new'
+                )
+                conn.execute('''
+                    CREATE TABLE user_notifications (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_id INTEGER NOT NULL,
+                        event_id INTEGER,
+                        notification_type TEXT NOT NULL
+                            CHECK(notification_type IN (
+                                'reminder', 'organizer_message', 'cancellation'
+                            )),
+                        title TEXT NOT NULL,
+                        message TEXT NOT NULL CHECK(length(message) <= 1000),
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        read_at TEXT,
+                        FOREIGN KEY (user_id) REFERENCES users(id),
+                        FOREIGN KEY (event_id) REFERENCES events(id)
+                    )
+                ''')
+                conn.execute('''
+                    INSERT INTO user_notifications (
+                        id, user_id, event_id, notification_type, title, message
+                    ) VALUES (1, 1, 1, 'reminder', 'Legacy notice', 'Preserve me')
+                ''')
+                conn.execute('DROP TABLE user_notifications_new')
+                conn.commit()
+
+            original_database = cleanstep.DATABASE
+            cleanstep.DATABASE = str(database_path)
+            try:
+                cleanstep.init_db()
+            finally:
+                cleanstep.DATABASE = original_database
+
+            with closing(sqlite3.connect(database_path)) as conn:
+                legacy_notification = conn.execute('''
+                    SELECT notification_type, title, message
+                    FROM user_notifications WHERE id = 1
+                ''').fetchone()
+                conn.execute('''
+                    INSERT INTO user_notifications (
+                        user_id, event_id, notification_type, title, message
+                    ) VALUES (1, 1, 'reservation', 'New type', 'Allowed after migration')
+                ''')
+                conn.commit()
+                foreign_key_errors = conn.execute('PRAGMA foreign_key_check').fetchall()
+            self.assertEqual(
+                legacy_notification,
+                ('reminder', 'Legacy notice', 'Preserve me'),
+            )
+            self.assertEqual(foreign_key_errors, [])
 
     def test_database_initialization_is_available_as_flask_cli_command(self):
         result = cleanstep.app.test_cli_runner().invoke(args=['init-db'])
