@@ -1,0 +1,32 @@
+name: Deploy CleanStep
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy to EC2
+        uses: appleboy/ssh-action@v1.2.0
+
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+
+          script: |
+            cd ~/cleanstep
+
+            git pull origin main
+
+            source venv/bin/activate
+
+            pip install -r requirements.txt
+
+            sudo systemctl restart cleanstep
+
+            sudo systemctl status cleanstep --no-pager
