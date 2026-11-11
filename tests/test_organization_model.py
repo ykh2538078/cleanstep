@@ -537,6 +537,88 @@ class OrganizationModelTests(unittest.TestCase):
         finally:
             temp_dir.cleanup()
 
+    def test_notification_schema_migration_preserves_rows_and_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            legacy_path = Path(temp_dir) / 'legacy-notifications.db'
+            shutil.copy2(cleanstep.DATABASE, legacy_path)
+            with sqlite3.connect(legacy_path) as legacy_db:
+                legacy_db.execute('PRAGMA foreign_keys = OFF')
+                legacy_db.execute('DROP TABLE user_notifications')
+                legacy_db.execute('''
+                    CREATE TABLE user_notifications (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_id INTEGER NOT NULL,
+                        event_id INTEGER,
+                        notification_type TEXT NOT NULL
+                            CHECK(notification_type IN (
+                                'reminder', 'organizer_message', 'cancellation'
+                            )),
+                        title TEXT NOT NULL,
+                        message TEXT NOT NULL CHECK(length(message) <= 1000),
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        read_at TEXT,
+                        FOREIGN KEY (user_id) REFERENCES users(id),
+                        FOREIGN KEY (event_id) REFERENCES events(id)
+                    )
+                ''')
+                legacy_db.execute('''
+                    INSERT INTO user_notifications (
+                        id, user_id, event_id, notification_type, title, message,
+                        created_at, read_at
+                    ) VALUES (
+                        78001, 1, 1, 'organizer_message', 'Legacy notice',
+                        'Preserve this notification', '2026-10-20 12:00:00',
+                        '2026-10-20 12:05:00'
+                    )
+                ''')
+            legacy_db.close()
+
+            previous_database = cleanstep.DATABASE
+            cleanstep.DATABASE = str(legacy_path)
+            try:
+                cleanstep.init_db()
+                cleanstep.init_db()
+                with database_connection() as conn:
+                    notice = conn.execute('''
+                        SELECT id, user_id, event_id, notification_type, title,
+                               message, created_at, read_at
+                        FROM user_notifications WHERE id = 78001
+                    ''').fetchone()
+                    conn.executemany('''
+                        INSERT INTO user_notifications (
+                            user_id, event_id, notification_type, title, message
+                        ) VALUES (1, 1, ?, ?, ?)
+                    ''', [
+                        (
+                            notification_type,
+                            f'Migration test: {notification_type}',
+                            'New notification type is accepted',
+                        )
+                        for notification_type in (
+                            'event_added', 'reservation',
+                            'reservation_cancelled', 'activity_completed',
+                        )
+                    ])
+                    foreign_key_issues = conn.execute(
+                        'PRAGMA foreign_key_check'
+                    ).fetchall()
+                    migrated_count = conn.execute(
+                        'SELECT COUNT(*) FROM user_notifications'
+                    ).fetchone()[0]
+
+                self.assertEqual(
+                    tuple(notice),
+                    (
+                        78001, 1, 1, 'organizer_message', 'Legacy notice',
+                        'Preserve this notification', '2026-10-20 12:00:00',
+                        '2026-10-20 12:05:00',
+                    ),
+                )
+                self.assertEqual(migrated_count, 5)
+                self.assertEqual(foreign_key_issues, [])
+            finally:
+                cleanstep.DATABASE = previous_database
+
     def test_duplicate_successful_image_does_not_award_points_twice(self):
         bin_name = 'Duplicate Image Test Bin'
         with database_connection() as conn:

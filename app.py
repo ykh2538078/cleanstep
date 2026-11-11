@@ -113,6 +113,51 @@ def get_db():
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
+
+def _create_user_notifications_table(conn):
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS user_notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            event_id INTEGER,
+            notification_type TEXT NOT NULL CHECK(notification_type IN (
+                'reminder', 'organizer_message', 'cancellation',
+                'event_added', 'reservation', 'reservation_cancelled',
+                'activity_completed'
+            )),
+            title TEXT NOT NULL,
+            message TEXT NOT NULL CHECK(length(message) <= 1000),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            read_at TEXT,
+            FOREIGN KEY (user_id) REFERENCES users(id),
+            FOREIGN KEY (event_id) REFERENCES events(id)
+        )
+    ''')
+
+
+def _notify_all_users_of_new_event(conn, event_id):
+    event = conn.execute('''
+        SELECT name, location, datetime
+        FROM events
+        WHERE id = ? AND status = 'open' AND review_status = 'approved'
+    ''', (event_id,)).fetchone()
+    if event is None:
+        return
+
+    conn.execute('''
+        INSERT INTO user_notifications (
+            user_id, event_id, notification_type, title, message
+        )
+        SELECT id, ?, 'event_added', ?, ?
+        FROM users
+        WHERE role = 'user'
+    ''', (
+        event_id,
+        f'新しいイベント：{event["name"]}',
+        f'開催日時：{event["datetime"]}\n開催場所：{event["location"]}',
+    ))
+
+
 @app.teardown_appcontext
 def close_db(exception=None):
     db = g.pop('db', None)
@@ -405,21 +450,36 @@ def init_db():
         ''')
         conn.execute('CREATE INDEX IF NOT EXISTS idx_event_reservations_event_status ON event_reservations(event_id, status)')
 
-        conn.execute('''
-            CREATE TABLE IF NOT EXISTS user_notifications (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                event_id INTEGER,
-                notification_type TEXT NOT NULL
-                    CHECK(notification_type IN ('reminder', 'organizer_message', 'cancellation')),
-                title TEXT NOT NULL,
-                message TEXT NOT NULL CHECK(length(message) <= 1000),
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                read_at TEXT,
-                FOREIGN KEY (user_id) REFERENCES users(id),
-                FOREIGN KEY (event_id) REFERENCES events(id)
+        notification_table = conn.execute('''
+            SELECT sql FROM sqlite_master
+            WHERE type = 'table' AND name = 'user_notifications'
+        ''').fetchone()
+        required_notification_types = (
+            'event_added', 'reservation', 'reservation_cancelled',
+            'activity_completed',
+        )
+        if notification_table and not all(
+            f"'{notification_type}'" in notification_table['sql']
+            for notification_type in required_notification_types
+        ):
+            conn.execute('DROP INDEX IF EXISTS idx_user_notifications_reminder_once')
+            conn.execute('DROP INDEX IF EXISTS idx_user_notifications_user_unread')
+            conn.execute(
+                'ALTER TABLE user_notifications RENAME TO user_notifications_legacy'
             )
-        ''')
+            _create_user_notifications_table(conn)
+            conn.execute('''
+                INSERT INTO user_notifications (
+                    id, user_id, event_id, notification_type, title, message,
+                    created_at, read_at
+                )
+                SELECT id, user_id, event_id, notification_type, title, message,
+                       created_at, read_at
+                FROM user_notifications_legacy
+            ''')
+            conn.execute('DROP TABLE user_notifications_legacy')
+        else:
+            _create_user_notifications_table(conn)
         conn.execute('''
             CREATE UNIQUE INDEX IF NOT EXISTS idx_user_notifications_reminder_once
             ON user_notifications(user_id, event_id, notification_type)
@@ -2209,6 +2269,16 @@ def trash_bin_deposit():
                 ))
                 
                 conn.execute('UPDATE users SET total_points = total_points + ? WHERE id = ?', (points_earned, user_id))
+                conn.execute('''
+                    INSERT INTO user_notifications (
+                        user_id, notification_type, title, message
+                    ) VALUES (?, 'activity_completed', ?, ?)
+                ''', (
+                    user_id,
+                    'ごみ捨て完了のお知らせ',
+                    f'{bin_location}でごみを{final_trash_count}個記録しました。'
+                    f'{points_earned}ポイントを獲得しました。',
+                ))
             app.logger.info(
                 "ごみ画像判定と活動履歴の保存が完了しました。user_id=%s activity_id=%s database=%s",
                 user_id, activity_id, DATABASE
@@ -2331,10 +2401,21 @@ def event_reserve(event_id):
                 if not reserved:
                     return '有効な予約がありません。', 409
                 with conn:
-                    conn.execute('''
+                    reservation_cursor = conn.execute('''
                         UPDATE event_reservations SET status = 'cancelled'
                         WHERE user_id = ? AND event_id = ? AND status = 'reserved'
                     ''', (user_id, event_id))
+                    if reservation_cursor.rowcount != 1:
+                        return '予約状態を更新できませんでした。ページを再読み込みしてください。', 409
+                    conn.execute('''
+                        INSERT INTO user_notifications (
+                            user_id, event_id, notification_type, title, message
+                        ) VALUES (?, ?, 'reservation_cancelled', ?, ?)
+                    ''', (
+                        user_id, event_id,
+                        f'予約をキャンセルしました：{event["name"]}',
+                        f'「{event["name"]}」の予約をキャンセルしました。',
+                    ))
                 return redirect(url_for('home'))
 
             if action != 'reserve':
@@ -2343,7 +2424,7 @@ def event_reserve(event_id):
                 # 予約数の確認と登録を同じ書き込みロック内で行い、定員超過を防ぐ。
                 conn.execute('BEGIN IMMEDIATE')
                 current_event = conn.execute('''
-                    SELECT capacity, datetime, status, review_status
+                    SELECT name, location, capacity, datetime, status, review_status
                     FROM events WHERE id = ?
                 ''', (event_id,)).fetchone()
                 if (
@@ -2400,6 +2481,17 @@ def event_reserve(event_id):
                                 completed_at = NULL
                             WHERE user_id = ? AND event_id = ? AND status = 'cancelled'
                         ''', (user_id, event_id))
+                    conn.execute('''
+                        INSERT INTO user_notifications (
+                            user_id, event_id, notification_type, title, message
+                        ) VALUES (?, ?, 'reservation', ?, ?)
+                    ''', (
+                        user_id, event_id,
+                        f'予約完了：{current_event["name"]}',
+                        f'「{current_event["name"]}」を予約しました。\n'
+                        f'開催日時：{current_event["datetime"]}\n'
+                        f'開催場所：{current_event["location"]}',
+                    ))
                 conn.commit()
             except sqlite3.IntegrityError:
                 conn.rollback()
@@ -2450,20 +2542,94 @@ def user_notifications():
     conn = get_db()
     try:
         _create_due_event_reminders(conn, user_id)
-        with conn:
-            conn.execute('''
-                UPDATE user_notifications SET read_at = CURRENT_TIMESTAMP
-                WHERE user_id = ? AND read_at IS NULL
-            ''', (user_id,))
         notifications = conn.execute('''
-            SELECT n.*, e.name AS event_name
+            SELECT n.*, e.name AS event_name,
+                   CASE WHEN n.read_at IS NULL THEN 0 ELSE 1 END AS is_read
             FROM user_notifications n
             LEFT JOIN events e ON e.id = n.event_id
             WHERE n.user_id = ?
             ORDER BY n.created_at DESC, n.id DESC
             LIMIT 100
         ''', (user_id,)).fetchall()
-        return render_template('notifications.html', notifications=notifications)
+        unread_notification_count = conn.execute('''
+            SELECT COUNT(*) FROM user_notifications
+            WHERE user_id = ? AND read_at IS NULL
+        ''', (user_id,)).fetchone()[0]
+        return render_template(
+            'notifications.html',
+            notifications=notifications,
+            unread_notification_count=unread_notification_count,
+        )
+    finally:
+        conn.close()
+
+
+@app.route('/notifications/<int:notification_id>/read', methods=['POST'])
+@user_required
+def mark_notification_read(notification_id):
+    if not validate_csrf():
+        return 'CSRFトークンが不正です。', 400
+    conn = get_db()
+    try:
+        with conn:
+            conn.execute('''
+                UPDATE user_notifications SET read_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND user_id = ? AND read_at IS NULL
+            ''', (notification_id, session['user_id']))
+        return redirect(url_for('user_notifications'))
+    finally:
+        conn.close()
+
+
+@app.route('/notifications/<int:notification_id>/open', methods=['POST'])
+@user_required
+def open_notification(notification_id):
+    if not validate_csrf():
+        return 'CSRFトークンが不正です。', 400
+    conn = get_db()
+    try:
+        event_id = None
+        with conn:
+            notification = conn.execute('''
+                SELECT event_id FROM user_notifications
+                WHERE id = ? AND user_id = ?
+            ''', (notification_id, session['user_id'])).fetchone()
+            if notification is None:
+                return '通知が見つかりません。', 404
+
+            conn.execute('''
+                UPDATE user_notifications SET read_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND user_id = ? AND read_at IS NULL
+            ''', (notification_id, session['user_id']))
+            if notification['event_id'] is not None:
+                event = conn.execute('''
+                    SELECT id FROM events
+                    WHERE id = ? AND status = 'open'
+                      AND review_status = 'approved'
+                ''', (notification['event_id'],)).fetchone()
+                if event is not None:
+                    event_id = event['id']
+
+        if event_id is not None:
+            return redirect(url_for('event_reserve', event_id=event_id))
+        return redirect(url_for('user_notifications'))
+    finally:
+        conn.close()
+
+
+@app.route('/notifications/read-all', methods=['POST'])
+@user_required
+def mark_all_notifications_read():
+    if not validate_csrf():
+        return 'CSRFトークンが不正です。', 400
+    conn = get_db()
+    try:
+        with conn:
+            conn.execute('''
+                UPDATE user_notifications SET read_at = CURRENT_TIMESTAMP
+                WHERE user_id = ? AND read_at IS NULL
+            ''', (session['user_id'],))
+        return redirect(url_for('user_notifications'))
     finally:
         conn.close()
 
@@ -2699,6 +2865,16 @@ def event_complete(event_id):
             ))
             
             conn.execute('UPDATE users SET total_points = total_points + ? WHERE id = ?', (bonus_points, user_id))
+            conn.execute('''
+                INSERT INTO user_notifications (
+                    user_id, event_id, notification_type, title, message
+                ) VALUES (?, ?, 'activity_completed', ?, ?)
+            ''', (
+                user_id, event_id,
+                f'イベント参加完了：{event["name"]}',
+                f'「{event["name"]}」の活動が完了しました。'
+                f'{bonus_points}ポイントを獲得しました。',
+            ))
             
         activity_id = activity_cursor.lastrowid
         session.pop(f'event_started_at_{event_id}', None)
@@ -3862,7 +4038,7 @@ def admin_event_add():
             conn = get_db()
             try:
                 with conn:
-                    conn.execute('''
+                    event_cursor = conn.execute('''
                         INSERT INTO events (
                             name, location, latitude, longitude, datetime,
                             bonus_points, category
@@ -3873,6 +4049,7 @@ def admin_event_add():
                         event_values['datetime'], event_values['bonus_points'],
                         event_values['category'],
                     ))
+                    _notify_all_users_of_new_event(conn, event_cursor.lastrowid)
                 return redirect(url_for('admin_events'))
             finally:
                 conn.close()
@@ -4046,6 +4223,8 @@ def review_event(event_id):
             ))
             if cursor.rowcount != 1:
                 return '審査対象が見つからないか、すでに審査済みです。', 409
+            if decision == 'approved':
+                _notify_all_users_of_new_event(conn, event_id)
         return redirect(url_for('admin_event_reviews'))
     finally:
         conn.close()
