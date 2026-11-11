@@ -108,6 +108,28 @@
                 </div>
 
                 <div class="form-group">
+                    <label for="trash_category">主なごみの種類（地域傾向分析用）</label>
+                    <select id="trash_category" name="trash_category">
+                        <option value="ペットボトル・飲料容器">🍾 ペットボトル・飲料容器</option>
+                        <option value="カップ・容器類">🥤 カップ・プラ容器類</option>
+                        <option value="空き缶・ビン">🥫 空き缶・ビン</option>
+                        <option value="ビニール・包装ごみ">🛍️ ビニール・包装ごみ</option>
+                        <option value="吸い殻・小ごみ">🚬 吸い殻・小ごみ</option>
+                        <option value="複合・その他">📦 複合・その他</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="bag_size">推定量・袋のサイズ目安</label>
+                    <select id="bag_size" name="bag_size">
+                        <option value="手持ち・少量（1〜3個）">✋ 手持ち・少量（1〜3個）</option>
+                        <option value="小袋（レジ袋・5L相当）">🛍️ 小袋（レジ袋・5L相当）</option>
+                        <option value="中袋（20L相当）">🗑️ 中袋（20L相当）</option>
+                        <option value="大袋（45L相当）">📦 大袋（45L相当）</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
                     <label for="trash_count">投入するごみの総数（自己申告）</label>
                     <select id="trash_count" name="trash_count">
                         {% for i in range(1, 11) %}

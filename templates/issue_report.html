@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>地域の課題を報告 | CleanStep</title>
+    <style>
+        body { font-family: 'Helvetica Neue', Arial, sans-serif; margin: 0; background: #f4f7f6; color: #263238; }
+        .header { background: linear-gradient(135deg, #e67e22, #d35400); color: #fff; padding: 24px 20px; text-align: center; }
+        .header h1 { margin: 0 0 6px; font-size: 22px; }
+        .header p { margin: 0; font-size: 13px; opacity: .92; }
+        .container { max-width: 560px; margin: 20px auto; padding: 0 15px 40px; }
+        .card { background: #fff; border-radius: 14px; padding: 22px; margin-bottom: 18px; box-shadow: 0 4px 16px rgba(0,0,0,.05); }
+        .card h2 { margin: 0 0 12px; font-size: 17px; color: #2c3e50; border-left: 4px solid #e67e22; padding-left: 9px; }
+        label { display: block; font-weight: 700; font-size: 14px; margin: 14px 0 6px; color: #34495e; }
+        input[type="text"], select, textarea, input[type="file"] { width: 100%; box-sizing: border-box; padding: 12px; border: 1px solid #ccd6d2; border-radius: 8px; font: inherit; font-size: 15px; background: #fcfcfc; }
+        textarea { min-height: 90px; resize: vertical; }
+        .gps-row { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+        .gps-btn { padding: 10px 14px; border: 1px solid #257a52; border-radius: 8px; background: #eef7f1; color: #17633f; font-weight: 700; font-size: 13px; cursor: pointer; white-space: nowrap; }
+        .coords-hint { font-size: 12px; color: #64748b; margin-top: 6px; }
+        .error-message { padding: 12px 14px; margin-bottom: 16px; border: 1px solid #f1b9b5; border-radius: 8px; background: #fff0ef; color: #8f241f; }
+        .submit-btn { width: 100%; padding: 16px; border: 0; border-radius: 28px; background: linear-gradient(135deg, #e67e22, #d35400); color: #fff; font-size: 16px; font-weight: 700; cursor: pointer; box-shadow: 0 6px 15px rgba(230,126,34,.28); }
+    </style>
+</head>
+<body data-view-mode="{{ view_mode }}">
+    {% include "_user_navigation.html" %}
+    <div class="header">
+        <h1>🚩 地域のゴミ・課題を報告</h1>
+        <p>写真と位置情報で地域のゴミ問題を共有し、清掃活動や環境改善につなげます</p>
+    </div>
+
+    <main class="container">
+        <form method="POST" enctype="multipart/form-data">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            {% if error_msg %}
+                <p class="error-message" role="alert">{{ error_msg }}</p>
+            {% endif %}
+
+            <section class="card">
+                <h2>1. 現場の写真（任意・AI自動カウント対応）</h2>
+                <label for="issue_image">写真を撮影または選択</label>
+                <input type="file" id="issue_image" name="issue_image" accept="image/*">
+                <p class="coords-hint">写真を添付すると、AIがペットボトル・容器類の個数を自動で推定して記録します。</p>
+            </section>
+
+            <section class="card">
+                <h2>2. 発見した場所・位置情報</h2>
+                <label for="location">場所の名称・目安（必須）</label>
+                <input type="text" id="location" name="location" maxlength="200" required placeholder="例：〇〇駅 北口ロータリー自販機横" value="{{ form.location }}">
+                <div class="gps-row">
+                    <button type="button" class="gps-btn" id="get-gps-btn">📍 現在地（GPS）を自動取得</button>
+                    <span id="gps-status" class="coords-hint">
+                        {% if form.latitude and form.longitude %}取得済み ({{ form.latitude }}, {{ form.longitude }}){% else %}未取得（任意）{% endif %}
+                    </span>
+                </div>
+                <input type="hidden" id="latitude" name="latitude" value="{{ form.latitude }}">
+                <input type="hidden" id="longitude" name="longitude" value="{{ form.longitude }}">
+            </section>
+
+            <section class="card">
+                <h2>3. ゴミの種類と状況</h2>
+                <label for="title">課題のタイトル（必須）</label>
+                <input type="text" id="title" name="title" maxlength="100" required placeholder="例：駅前の植え込みにペットボトルが散乱" value="{{ form.title }}">
+
+                <label for="trash_type">ゴミの種類・課題区分</label>
+                <select id="trash_type" name="trash_type">
+                    {% for t in trash_types %}
+                        <option value="{{ t }}" {% if form.trash_type == t %}selected{% endif %}>{{ t }}</option>
+                    {% endfor %}
+                </select>
+
+                <label for="severity">状況・量</label>
+                <select id="severity" name="severity">
+                    <option value="low" {% if form.severity == 'low' %}selected{% endif %}>少量（数個程度）</option>
+                    <option value="medium" {% if form.severity == 'medium' %}selected{% endif %}>目立つ（袋1つ分程度・散乱）</option>
+                    <option value="high" {% if form.severity == 'high' %}selected{% endif %}>多量・緊急（清掃イベントや回収が必要）</option>
+                </select>
+
+                <label for="description">気づいたこと・原因の推測（任意）</label>
+                <textarea id="description" name="description" maxlength="500" placeholder="例：近くにゴミ箱がなく、夜間によく捨てられているようです">{{ form.description }}</textarea>
+            </section>
+
+            <button type="submit" class="submit-btn">🚩 この内容で地域課題を報告する</button>
+        </form>
+    </main>
+
+    <script>
+        (() => {
+            const btn = document.getElementById('get-gps-btn');
+            const status = document.getElementById('gps-status');
+            const latInput = document.getElementById('latitude');
+            const lngInput = document.getElementById('longitude');
+            if (!btn) return;
+            btn.addEventListener('click', () => {
+                if (!navigator.geolocation) {
+                    status.textContent = 'お使いのブラウザでは位置情報を取得できません。';
+                    return;
+                }
+                status.textContent = '現在地を取得中...';
+                navigator.geolocation.getCurrentPosition(
+                    pos => {
+                        const lat = pos.coords.latitude.toFixed(6);
+                        const lng = pos.coords.longitude.toFixed(6);
+                        latInput.value = lat;
+                        lngInput.value = lng;
+                        status.textContent = `取得完了 (${lat}, ${lng})`;
+                    },
+                    () => {
+                        status.textContent = '位置情報を取得できませんでした。場所の名称を入力してください。';
+                    },
+                    { enableHighAccuracy: true, timeout: 8000 }
+                );
+            });
+        })();
+    </script>
+</body>
+</html>

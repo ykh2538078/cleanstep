@@ -16,6 +16,9 @@
         .notification-open-button:hover { background: #f4f8f5; }
         .notification-open-title { display: block; margin-bottom: 8px; font-size: 1.05rem; font-weight: 700; }
         .notification-open-message { display: block; line-height: 1.7; white-space: pre-line; }
+        .notification-actions { display: flex; justify-content: flex-end; padding: 0 18px 12px; }
+        .notification-read-btn { padding: 6px 12px; border: 1px solid #257a52; border-radius: 6px; background: #fff; color: #257a52; font: inherit; font-size: .82rem; font-weight: 700; cursor: pointer; }
+        .notification-read-btn:hover { background: #eef7f1; }
         time { display: block; margin-top: 10px; color: #64748b; font-size: .85rem; }
         .heading button { padding: 9px 12px; border: 0; border-radius: 6px; background: #257a52; color: #fff; font: inherit; font-weight: 700; cursor: pointer; }
         .empty { padding: 24px; background: #fff; border-radius: 10px; color: #596a63; }
@@ -44,6 +47,14 @@
                         <time>{{ notification.created_at|jst_datetime }}</time>
                     </button>
                 </form>
+                {% if not notification.is_read %}
+                <div class="notification-actions">
+                    <form method="POST" action="{{ url_for('mark_notification_read', notification_id=notification.id) }}" style="margin:0;">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <button class="notification-read-btn" type="submit">既読にする</button>
+                    </form>
+                </div>
+                {% endif %}
             </article>
         {% else %}
             <p class="empty">まだ通知はありません。</p>

@@ -32,7 +32,17 @@
                 <div class="stat">保有ポイント<strong>{{ user.total_points }} pt</strong></div>
                 <div class="stat">累計回収ごみ数<strong>{{ report.my_total_trash }} 個</strong></div>
                 <div class="stat">イベント参加数<strong>{{ report.my_event_count }} 回</strong></div>
+                <div class="stat">課題報告 / 改善提案<strong>{{ report.my_issue_report_count }} / {{ report.my_proposal_count }} 件</strong></div>
             </div>
+            {% if report.contribution_badges %}
+                <div style="margin-top:14px; display:flex; flex-wrap:wrap; gap:8px;">
+                    {% for badge in report.contribution_badges %}
+                        <span style="padding:6px 12px; border-radius:999px; background:#eef7f1; border:1px solid #ccebdd; color:#17633f; font-size:.82rem; font-weight:700;">
+                            {{ badge.icon }} {{ badge.title }}（{{ badge.desc }}）
+                        </span>
+                    {% endfor %}
+                </div>
+            {% endif %}
         </section>
         <section class="calendar-wrap">
             <div class="month-nav">

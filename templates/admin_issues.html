@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>地域課題・改善提案・再発分析 | CleanStep</title>
+    <style>
+        body { margin: 0; padding: 24px 16px; background: #f4f7f6; color: #263238; font-family: "Yu Gothic", Meiryo, sans-serif; }
+        main { max-width: 1200px; margin: 24px auto; }
+        section { padding: 20px; margin: 18px 0; background: #fff; border: 1px solid #dce5e1; border-radius: 10px; overflow-x: auto; }
+        h1, h2 { margin-top: 0; color: #17633f; }
+        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+        @media (max-width: 860px) { .grid-2 { grid-template-columns: 1fr; } }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        th, td { padding: 10px; border-bottom: 1px solid #dce5e1; text-align: left; vertical-align: top; }
+        th { background: #edf5f0; white-space: nowrap; }
+        .badge { display: inline-block; padding: 3px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; }
+        .status-open { background: #fee2e2; color: #991b1b; }
+        .status-in_progress { background: #fef3c7; color: #92400e; }
+        .status-resolved { background: #dcfce7; color: #166534; }
+        input[type="text"], select { padding: 7px 9px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 13px; }
+        button { padding: 7px 12px; border: 0; border-radius: 6px; background: #257a52; color: #fff; font-weight: 700; cursor: pointer; font-size: 12px; }
+        .flash-msg { padding: 12px 16px; border-radius: 8px; background: #eef7f1; border: 1px solid #ccebdd; color: #17633f; margin-bottom: 16px; font-weight: 700; }
+    </style>
+</head>
+<body>
+    {% if is_admin %}
+        {% include "_admin_navigation.html" %}
+    {% else %}
+        {% include "_organizer_navigation.html" %}
+    {% endif %}
+    <main>
+        <p>
+            {% if is_admin %}
+                <a href="{{ url_for('admin_dashboard') }}">← 管理者ダッシュボードに戻る</a>
+            {% else %}
+                <a href="{{ url_for('organizer_dashboard') }}">← 団体ダッシュボードに戻る</a>
+            {% endif %}
+        </p>
+        <h1>🚩 地域課題・改善提案・場所別再発分析レポート</h1>
+        <p>住民から報告された地域課題、ごみ種類別の傾向、活動前後の状態変化（再発状況）、および改善アクションプランを一元管理します。</p>
+
+        {% for category, message in get_flashed_messages(with_categories=true) %}
+            <div class="flash-msg" role="status">{{ message }}</div>
+        {% endfor %}
+
+        <div class="grid-2">
+            <section style="margin:0;">
+                <h2>📍 場所別の課題発生・解決状況（集中地点分析）</h2>
+                <table>
+                    <thead><tr><th>場所・エリア</th><th>報告総数</th><th>未解決</th><th>解決済み</th></tr></thead>
+                    <tbody>
+                        {% for row in by_location %}
+                            <tr>
+                                <td><strong>{{ row.location }}</strong></td>
+                                <td>{{ row.issue_count }} 件</td>
+                                <td style="color:#b91c1c; font-weight:700;">{{ row.open_count }} 件</td>
+                                <td style="color:#15803d;">{{ row.resolved_count }} 件</td>
+                            </tr>
+                        {% else %}
+                            <tr><td colspan="4">課題報告データはまだありません。</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </section>
+
+            <section style="margin:0;">
+                <h2>🗑️ 課題報告・日常ごみ捨ての種類別集計</h2>
+                <table>
+                    <thead><tr><th>ごみの種類・課題区分</th><th>課題報告件数</th><th>AI検出数合計</th></tr></thead>
+                    <tbody>
+                        {% for row in by_trash_type %}
+                            <tr>
+                                <td>{{ row.trash_type }}</td>
+                                <td>{{ row.count }} 件</td>
+                                <td>{{ row.ai_total }} 個</td>
+                            </tr>
+                        {% else %}
+                            <tr><td colspan="3">課題報告データはまだありません。</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                <h3 style="font-size:14px; margin:16px 0 8px; color:#17633f;">エコごみ箱 種類別回収実績</h3>
+                <table>
+                    <thead><tr><th>ごみ区分</th><th>投函記録数</th><th>AI検出数合計</th></tr></thead>
+                    <tbody>
+                        {% for row in trash_category_stats %}
+                            <tr>
+                                <td>{{ row.category }}</td>
+                                <td>{{ row.record_count }} 件</td>
+                                <td>{{ row.ai_total }} 個</td>
+                            </tr>
+                        {% else %}
+                            <tr><td colspan="3">エコごみ箱の記録はまだありません。</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </section>
+        </div>
+
+        <section>
+            <h2>🚩 地域課題報告一覧と対応ステータス管理（{{ issues|length }} 件）</h2>
+            {% set status_names = {'open': '未対応', 'in_progress': '対応中・現地確認中', 'resolved': '解決済み'} %}
+            <table>
+                <thead>
+                    <tr>
+                        <th>ID / 日時</th>
+                        <th>タイトル・場所</th>
+                        <th>種類 / 深刻度 / AI推定</th>
+                        <th>詳細メモ</th>
+                        <th>現在の状態</th>
+                        {% if is_admin %}<th>ステータス・対応メモ更新</th>{% endif %}
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for issue in issues %}
+                        <tr>
+                            <td>#{{ issue.id }}<br><small>{{ issue.created_at|jst_datetime }}</small></td>
+                            <td>
+                                <strong>{{ issue.title }}</strong><br>
+                                📍 {{ issue.location }}<br>
+                                <small>報告者: {{ issue.reporter_name or 'ユーザー' }}</small>
+                            </td>
+                            <td>
+                                {{ issue.trash_type }}<br>
+                                深刻度: {{ issue.severity }}<br>
+                                {% if issue.ai_detected_count is not none %}AI検出: {{ issue.ai_detected_count }}個{% endif %}
+                            </td>
+                            <td>
+                                {{ issue.description or '—' }}
+                                {% if issue.action_note %}
+                                    <div style="margin-top:4px; color:#166534; font-size:12px;">対応メモ: {{ issue.action_note }}</div>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <span class="badge status-{{ issue.status }}">{{ status_names.get(issue.status, issue.status) }}</span>
+                                <div style="margin-top:8px;">
+                                    <a href="{{ url_for('admin_event_add', from_issue=issue.id) if is_admin else url_for('organizer_event_new', from_issue=issue.id) }}" style="display:inline-block; padding:5px 9px; border-radius:6px; background:#edf5f0; border:1px solid #ccebdd; color:#17633f; font-size:11px; font-weight:700; text-decoration:none;">
+                                        🧹 この課題からイベントを企画
+                                    </a>
+                                </div>
+                            </td>
+                            {% if is_admin %}
+                            <td>
+                                <form method="POST" action="{{ url_for('admin_issue_status_update', issue_id=issue.id) }}" style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                    <select name="status">
+                                        <option value="open" {% if issue.status == 'open' %}selected{% endif %}>未対応</option>
+                                        <option value="in_progress" {% if issue.status == 'in_progress' %}selected{% endif %}>対応中・現地確認中</option>
+                                        <option value="resolved" {% if issue.status == 'resolved' %}selected{% endif %}>解決済み</option>
+                                    </select>
+                                    <input type="text" name="action_note" value="{{ issue.action_note or '' }}" placeholder="対応メモ（報告者に通知）" maxlength="500">
+                                    <button type="submit">保存</button>
+                                </form>
+                            </td>
+                            {% endif %}
+                        </tr>
+                    {% else %}
+                        <tr><td colspan="6">報告された地域課題はまだありません。</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </section>
+
+        <section>
+            <h2>✨ 清掃イベント参加者の役割・活動前後の状態変化（再発チェック）</h2>
+            <table>
+                <thead><tr><th>日時</th><th>イベント・場所</th><th>参加者の役割</th><th>活動前の状態</th><th>活動後の状態・再発リスク</th></tr></thead>
+                <tbody>
+                    {% for rec in event_state_changes %}
+                        <tr>
+                            <td>{{ rec.date|jst_datetime }}</td>
+                            <td>{{ rec.title }}<br><small>📍 {{ rec.location or '—' }}</small></td>
+                            <td>{{ rec.participant_role or '—' }}</td>
+                            <td>{{ rec.before_state or '—' }}</td>
+                            <td><strong>{{ rec.after_state or '—' }}</strong></td>
+                        </tr>
+                    {% else %}
+                        <tr><td colspan="5">活動前後の状態記録はまだありません。</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </section>
+
+        <section>
+            <h2>💡 地域改善提案（アクションプラン）一覧（{{ proposals|length }} 件）</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>提案タイトル / 対象場所</th>
+                        <th>区分 / 関連課題</th>
+                        <th>提案内容</th>
+                        <th>賛同数</th>
+                        <th>状態</th>
+                        {% if is_admin %}<th>審査・コメント更新</th>{% endif %}
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for p in proposals %}
+                        <tr>
+                            <td><strong>{{ p.title }}</strong><br>📍 {{ p.location }}</td>
+                            <td>{{ p.proposal_type }}<br><small>{{ p.issue_title or '—' }}</small></td>
+                            <td>{{ p.description }}</td>
+                            <td><strong>👍 {{ p.support_count }}</strong></td>
+                            <td>{{ p.status }}</td>
+                            {% if is_admin %}
+                            <td>
+                                <form method="POST" action="{{ url_for('admin_proposal_status_update', proposal_id=p.id) }}" style="display:flex; gap:6px; flex-wrap:wrap;">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                    <select name="status">
+                                        <option value="proposed" {% if p.status == 'proposed' %}selected{% endif %}>提案中</option>
+                                        <option value="under_review" {% if p.status == 'under_review' %}selected{% endif %}>検討中</option>
+                                        <option value="adopted" {% if p.status == 'adopted' %}selected{% endif %}>採用・実施決定</option>
+                                        <option value="completed" {% if p.status == 'completed' %}selected{% endif %}>対策完了</option>
+                                    </select>
+                                    <input type="text" name="admin_comment" value="{{ p.admin_comment or '' }}" placeholder="管理者コメント" maxlength="500">
+                                    <button type="submit">更新</button>
+                                </form>
+                            </td>
+                            {% endif %}
+                        </tr>
+                    {% else %}
+                        <tr><td colspan="6">地域改善提案はまだありません。</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </section>
+    </main>
+</body>
+</html>

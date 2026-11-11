@@ -14,6 +14,7 @@
         .card { background: white; padding: 25px; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.06); margin-bottom: 20px; text-align: left; }
         
         .status-badge { display: inline-block; background-color: #fce4d6; color: #e74c3c; font-weight: bold; padding: 6px 14px; border-radius: 20px; font-size: 14px; margin-bottom: 15px; }
+        .alert-error { background-color: #fdf2f2; border: 1px solid #f5c6cb; color: #a32626; border-radius: 10px; padding: 14px 16px; margin-bottom: 18px; font-size: 14px; font-weight: bold; text-align: left; line-height: 1.5; }
         .event-title { font-size: 24px; font-weight: bold; color: #2c3e50; margin: 0 0 5px 0; }
         .event-location { color: #7f8c8d; font-size: 14px; line-height: 1.6; margin-bottom: 30px; }
         
@@ -65,6 +66,12 @@
     </div>
 
     <div class="container">
+        {% if error_msg %}
+            <div class="alert-error" role="alert">{{ error_msg }}</div>
+        {% endif %}
+        {% for category, message in get_flashed_messages(with_categories=true) %}
+            <div class="alert-error" role="status">{{ message }}</div>
+        {% endfor %}
         <div class="card">
             <div class="status-badge">🔴 活動時間を計測中</div>
             
@@ -122,6 +129,35 @@
             <input type="hidden" name="detox_duration" id="detox_input" value="0">
             <input type="hidden" name="gps_points" id="gps_points_input" value="[]">
             <input type="hidden" name="device_steps" id="device_steps_input" value="">
+            <div class="card" style="padding: 18px 20px; margin-bottom: 16px;">
+                <div style="font-weight:bold; font-size:15px; color:#2c3e50; margin-bottom:12px; border-left:4px solid #2ecc71; padding-left:8px;">
+                    📝 活動前後の状態と役割の記録（地域改善データ）
+                </div>
+                <div style="margin-bottom:12px;">
+                    <label for="participant_role" style="display:block; font-size:13px; font-weight:bold; color:#566573; margin-bottom:4px;">今回のあなたの役割</label>
+                    <select id="participant_role" name="participant_role" style="width:100%; padding:10px; border:1px solid #d5dbdb; border-radius:8px; font-size:14px;">
+                        {% for role_opt in (participant_roles or ['ごみ回収・分別', '重点エリア清掃', '分別・袋管理サポート', '課題記録・写真撮影', '声かけ・安全見守り']) %}
+                            <option value="{{ role_opt }}" {% if role_opt == selected_role %}selected{% endif %}>{{ role_opt }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div style="margin-bottom:12px;">
+                    <label for="before_state" style="display:block; font-size:13px; font-weight:bold; color:#566573; margin-bottom:4px;">活動前の現地の状態</label>
+                    <select id="before_state" name="before_state" style="width:100%; padding:10px; border:1px solid #d5dbdb; border-radius:8px; font-size:14px;">
+                        <option value="一部にごみが溜まっていた">一部にごみが溜まっていた</option>
+                        <option value="広範囲にごみが散乱していた">広範囲にごみが散乱していた</option>
+                        <option value="比較的きれいだった（予防清掃）">比較的きれいだった（予防清掃）</option>
+                    </select>
+                </div>
+                <div>
+                    <label for="after_state" style="display:block; font-size:13px; font-weight:bold; color:#566573; margin-bottom:4px;">活動後の状態・再発の見通し</label>
+                    <select id="after_state" name="after_state" style="width:100%; padding:10px; border:1px solid #d5dbdb; border-radius:8px; font-size:14px;">
+                        <option value="大幅にきれいになった">大幅にきれいになった</option>
+                        <option value="きれいになったが再発注意">きれいになったが再発注意</option>
+                        <option value="まだ課題が残っている（追加対応が必要）">まだ課題が残っている（追加対応が必要）</option>
+                    </select>
+                </div>
+            </div>
             <button type="submit" class="btn-complete" id="submit_btn">⏹ 活動を終了して記録を確定</button>
         </form>
 

@@ -44,6 +44,8 @@
         <label for="reward_details">参加者向け特典</label>
         <textarea id="reward_details" name="reward_details" maxlength="500" required placeholder="例：参加者に地元商店街で使える割引券を配布（特典がない場合は「なし」と入力）">{{ event.reward_details or '' }}</textarea>
         <p class="input-hint">特典の内容・対象人数・受け取り方法を記入してください。特典を用意しない場合も「なし」と明記してください。</p>
+        <label for="purpose_issue">清掃目的・この場所の地域課題（任意）</label>
+        <textarea id="purpose_issue" name="purpose_issue" maxlength="500" placeholder="例：週末に飲料容器のポイ捨てが集中するため、集中回収とゴミ箱設置ニーズの調査を行います">{{ event.purpose_issue or '' }}</textarea>
         <button type="submit">{{ '変更して再申請' if event_id else '審査を申請' }}</button>
     </form>
     <p>申請後、行政の承認を受けるまで一般ユーザーには公開されません。</p>

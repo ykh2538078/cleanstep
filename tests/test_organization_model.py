@@ -22,8 +22,10 @@ _database_dir = tempfile.TemporaryDirectory()
 _database_path = Path(_database_dir.name) / "legacy.db"
 _previous_database_path = os.environ.get("CLEANSTEP_DATABASE_PATH")
 _previous_disable_ai = os.environ.get("CLEANSTEP_DISABLE_AI")
+_previous_demo_mode = os.environ.get("CLEANSTEP_DEMO_MODE")
 os.environ["CLEANSTEP_DATABASE_PATH"] = str(_database_path)
 os.environ["CLEANSTEP_DISABLE_AI"] = "true"
+os.environ["CLEANSTEP_DEMO_MODE"] = "false"
 
 with sqlite3.connect(_database_path) as legacy_db:
     legacy_db.executescript('''
@@ -3413,7 +3415,7 @@ class OrganizationModelTests(unittest.TestCase):
         try:
             response = self.client.get("/home")
             self.assertEqual(response.status_code, 200)
-            self.assertIn('href="/organizer"', response.get_data(as_text=True))
+            self.assertNotIn('href="/organizer"', response.get_data(as_text=True))
 
             response = self.client.get("/organizer")
             page = response.get_data(as_text=True)
@@ -3501,6 +3503,200 @@ class OrganizationModelTests(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         with self.client.session_transaction() as user_session:
             self.assertNotIn("user_id", user_session)
+
+    def test_mobile_pc_view_mode_and_issue_report_to_map_flow(self):
+        self._login_as(1)
+        try:
+            mobile_resp = self.client.get("/view-mode/mobile?next=/home", follow_redirects=True)
+            self.assertEqual(mobile_resp.status_code, 200)
+            mobile_page = mobile_resp.get_data(as_text=True)
+            self.assertIn('data-view-mode="mobile"', mobile_page)
+            self.assertIn("スマートフォン画面（現場アクション優先モード）", mobile_page)
+
+            pc_resp = self.client.get("/view-mode/pc?next=/home", follow_redirects=True)
+            self.assertEqual(pc_resp.status_code, 200)
+            pc_page = pc_resp.get_data(as_text=True)
+            self.assertIn('data-view-mode="pc"', pc_page)
+            self.assertIn("曜日別の活動傾向", pc_page)
+            self.assertIn("あなたの活動スタイルと発見実績", pc_page)
+
+            report_get = self.client.get("/issues/report")
+            self.assertEqual(report_get.status_code, 200)
+            self.assertIn("地域のゴミ・課題を報告", report_get.get_data(as_text=True))
+
+            report_post = self.client.post(
+                "/issues/report",
+                data={
+                    "csrf_token": "test-csrf-token",
+                    "title": "駅前ペットボトル散乱テスト",
+                    "location": "横浜駅西口ロータリー",
+                    "latitude": "35.465833",
+                    "longitude": "139.622313",
+                    "trash_type": "ペットボトル・飲料容器",
+                    "severity": "high",
+                    "description": "自販機横にごみ箱がない",
+                },
+            )
+            self.assertEqual(report_post.status_code, 302)
+            self.assertEqual(report_post.location, "/map")
+
+            map_resp = self.client.get("/map")
+            self.assertEqual(map_resp.status_code, 200)
+            map_page = map_resp.get_data(as_text=True)
+            self.assertIn("駅前ペットボトル散乱テスト", map_page)
+            self.assertIn("横浜駅西口ロータリー", map_page)
+        finally:
+            with database_connection() as conn:
+                conn.execute(
+                    "DELETE FROM issue_reports WHERE title = '駅前ペットボトル散乱テスト'"
+                )
+                conn.execute(
+                    "DELETE FROM user_notifications WHERE title LIKE '地域課題を報告しました：%'"
+                )
+
+    def test_proposals_and_admin_issue_management_flow(self):
+        self._login_as(1)
+        try:
+            prop_post = self.client.post(
+                "/proposals",
+                data={
+                    "csrf_token": "test-csrf-token",
+                    "title": "みなとみらいベンチ横ごみ箱増設案",
+                    "location": "横浜みなとみらい公園",
+                    "proposal_type": "ごみ箱の増設・配置見直し",
+                    "description": "週末のカップごみ散乱を防ぐため分別ごみ箱を1基増設する",
+                },
+                follow_redirects=True,
+            )
+            self.assertEqual(prop_post.status_code, 200)
+            self.assertIn("みなとみらいベンチ横ごみ箱増設案", prop_post.get_data(as_text=True))
+
+            self.client.post(
+                "/issues/report",
+                data={
+                    "csrf_token": "test-csrf-token",
+                    "title": "公園ベンチ裏の空き缶溜まり",
+                    "location": "横浜みなとみらい公園",
+                    "trash_type": "空き缶・ビン",
+                    "severity": "medium",
+                    "description": "日曜夕方に毎回発生",
+                },
+            )
+            with database_connection() as conn:
+                issue_id = conn.execute(
+                    "SELECT id FROM issue_reports WHERE title = '公園ベンチ裏の空き缶溜まり' ORDER BY id DESC LIMIT 1"
+                ).fetchone()["id"]
+                proposal_id = conn.execute(
+                    "SELECT id FROM improvement_proposals WHERE title = 'みなとみらいベンチ横ごみ箱増設案' ORDER BY id DESC LIMIT 1"
+                ).fetchone()["id"]
+
+            self._login_as(2, "admin")
+            admin_issues_get = self.client.get("/admin/issues")
+            self.assertEqual(admin_issues_get.status_code, 200)
+            self.assertIn("公園ベンチ裏の空き缶溜まり", admin_issues_get.get_data(as_text=True))
+
+            status_post = self.client.post(
+                f"/admin/issues/{issue_id}/status",
+                data={
+                    "csrf_token": "test-csrf-token",
+                    "status": "in_progress",
+                    "action_note": "次回イベントの重点清掃対象に設定しました",
+                },
+            )
+            self.assertEqual(status_post.status_code, 302)
+
+            prop_status_post = self.client.post(
+                f"/admin/proposals/{proposal_id}/status",
+                data={
+                    "csrf_token": "test-csrf-token",
+                    "status": "adopted",
+                    "admin_comment": "来月の設置候補として採用しました",
+                },
+            )
+            self.assertEqual(prop_status_post.status_code, 302)
+        finally:
+            with database_connection() as conn:
+                conn.execute(
+                    "DELETE FROM improvement_proposal_supports WHERE proposal_id IN (SELECT id FROM improvement_proposals WHERE title = 'みなとみらいベンチ横ごみ箱増設案')"
+                )
+                conn.execute(
+                    "DELETE FROM improvement_proposals WHERE title = 'みなとみらいベンチ横ごみ箱増設案'"
+                )
+                conn.execute(
+                    "DELETE FROM issue_reports WHERE title = '公園ベンチ裏の空き缶溜まり'"
+                )
+                conn.execute(
+                    "DELETE FROM user_notifications WHERE title LIKE '%公園ベンチ裏の空き缶溜まり%'"
+                )
+
+    def test_part3_bin_management_and_issue_to_event_prefill(self):
+        self._login_as(1)
+        try:
+            self.client.post(
+                "/issues/report",
+                data={
+                    "csrf_token": "test-csrf-token",
+                    "title": "海岸遊歩道のプラ容器散乱",
+                    "location": "臨港パーク海沿い",
+                    "latitude": "35.460000",
+                    "longitude": "139.638000",
+                    "trash_type": "ペットボトル・飲料容器",
+                    "severity": "high",
+                    "description": "強風時にプラ容器が溜まりやすい",
+                },
+            )
+            with database_connection() as conn:
+                issue_id = conn.execute(
+                    "SELECT id FROM issue_reports WHERE title = '海岸遊歩道のプラ容器散乱' ORDER BY id DESC LIMIT 1"
+                ).fetchone()["id"]
+
+            org_prefill = self.client.get(f"/organizer/events/new?from_issue={issue_id}")
+            self.assertEqual(org_prefill.status_code, 200)
+            org_html = org_prefill.get_data(as_text=True)
+            self.assertIn("臨港パーク海沿い 課題解決クリーンイベント", org_html)
+            self.assertIn("海岸遊歩道のプラ容器散乱", org_html)
+
+            mypage_resp = self.client.get("/mypage")
+            self.assertEqual(mypage_resp.status_code, 200)
+            self.assertIn("地域課題ウォッチャー", mypage_resp.get_data(as_text=True))
+
+            map_resp = self.client.get("/map")
+            self.assertEqual(map_resp.status_code, 200)
+            self.assertIn("地域環境の自動分析", map_resp.get_data(as_text=True))
+
+            self._login_as(2, "admin")
+            admin_prefill = self.client.get(f"/admin/events/add?from_issue={issue_id}")
+            self.assertEqual(admin_prefill.status_code, 200)
+            self.assertIn("臨港パーク海沿い 課題解決クリーンイベント", admin_prefill.get_data(as_text=True))
+
+            bin_post = self.client.post(
+                "/admin/bins/add",
+                data={
+                    "csrf_token": "test-csrf-token",
+                    "name": "臨港パーク分別エコボックス",
+                    "description": "海沿いベンチ横",
+                    "waste_types": "ペットボトル・プラ容器・空き缶",
+                    "bin_status": "full_reported",
+                    "lat": "35.460100",
+                    "lng": "139.638100",
+                },
+                follow_redirects=True,
+            )
+            self.assertEqual(bin_post.status_code, 200)
+            bins_html = bin_post.get_data(as_text=True)
+            self.assertIn("ペットボトル・プラ容器・空き缶", bins_html)
+            self.assertIn("満杯報告あり", bins_html)
+        finally:
+            with database_connection() as conn:
+                conn.execute(
+                    "DELETE FROM trash_bins WHERE name = '臨港パーク分別エコボックス'"
+                )
+                conn.execute(
+                    "DELETE FROM issue_reports WHERE title = '海岸遊歩道のプラ容器散乱'"
+                )
+                conn.execute(
+                    "DELETE FROM user_notifications WHERE title LIKE '%海岸遊歩道のプラ容器散乱%'"
+                )
 
 
 if __name__ == "__main__":

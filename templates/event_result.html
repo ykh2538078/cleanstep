@@ -63,6 +63,18 @@
                         <span class="data-label">🔥 消費カロリー（概算）</span>
                         <span class="data-value">{% if activity.gps_measured %}{{ activity.calories }} kcal（概算）{% else %}未計測{% endif %}</span>
                 </div>
+                {% if activity.participant_role %}
+                <div class="data-item">
+                    <span class="data-label">🤝 担当した役割</span>
+                    <span class="data-value">{{ activity.participant_role }}</span>
+                </div>
+                {% endif %}
+                {% if activity.before_state or activity.after_state %}
+                <div class="data-item">
+                    <span class="data-label">✨ 活動前後の変化</span>
+                    <span class="data-value" style="font-size:13px;">{{ activity.before_state or '—' }} → {{ activity.after_state or '—' }}</span>
+                </div>
+                {% endif %}
             </div>
         </div>
 

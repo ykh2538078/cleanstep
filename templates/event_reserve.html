@@ -78,6 +78,13 @@
                 <span class="bonus-badge">+{{ event['bonus_points'] }} pt</span>
             </div>
             <div class="info-group">
+                <span class="info-label">🎯 清掃目的・この場所の地域課題</span>
+                <span class="info-value" style="font-size: 14px; line-height: 1.6; display: block;">
+                    {{ event['purpose_issue'] or ('「' ~ event['location'] ~ '」周辺のポイ捨て・容器ごみの散乱を防ぎ、地域住民が気持ちよく利用できる環境を整えます。') }}
+                </span>
+            </div>
+
+            <div class="info-group">
                 <span class="info-label">🎁 参加者向け特典</span>
                 <span class="info-value">{{ event['reward_details'] or '特典の提供はありません' }}</span>
             </div>
@@ -89,6 +96,7 @@
             {% elif reserved %}
                 <div class="alert-joined">
                     📅 このイベントは開催前です（予約済み）<br>
+                    <span style="font-size: 13px; color: #17633f; display: inline-block; margin-top: 4px;">🤝 あなたの担当役割：<strong>{{ selected_role }}</strong></span><br>
                     <span style="font-size: 12px; font-weight: normal; opacity: 0.8;">開催日時になると、ホームの予約イベントから活動計測を開始できます。</span>
                 </div>
                 <form action="{{ url_for('event_reserve', event_id=event['id']) }}" method="POST" style="margin-top: 10px;">
@@ -101,6 +109,16 @@
                 <form action="{{ url_for('event_reserve', event_id=event['id']) }}" method="POST">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                     <input type="hidden" name="action" value="reserve">
+                    <div class="card" style="padding: 18px 20px; margin-bottom: 14px;">
+                        <label for="participant_role" style="display:block; font-size:13px; font-weight:bold; color:#2c3e50; margin-bottom:8px;">
+                            🤝 当日の参加スタイル・役割を選択（自分で考えて行動する）
+                        </label>
+                        <select id="participant_role" name="participant_role" style="width:100%; padding:11px; border:1px solid #ccd6d2; border-radius:8px; font-size:15px; background:#fcfcfc;">
+                            {% for role_opt in (participant_roles or ['ごみ回収・分別', '重点エリア清掃', '分別・袋管理サポート', '課題記録・写真撮影', '声かけ・安全見守り']) %}
+                                <option value="{{ role_opt }}" {% if role_opt == selected_role %}selected{% endif %}>{{ role_opt }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
                     <button type="submit" class="btn-reserve">このイベントを予約する</button>
                 </form>
             {% endif %}

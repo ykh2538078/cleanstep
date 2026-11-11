@@ -152,7 +152,7 @@
 
                 <div class="col-half">
                     <label>イベント名称：</label>
-                    <input type="text" name="name" placeholder="例：みなとみらい清掃イベント" required class="input-field">
+                    <input type="text" name="name" value="{{ event.name or '' }}" placeholder="例：みなとみらい清掃イベント" required class="input-field">
                 </div>
 
                 <div class="col-half">
@@ -160,6 +160,11 @@
                     <input id="location" type="text" name="location" value="{{ event.location or '' }}" placeholder="例：横浜みなとみらい公園" required class="input-field">
                 </div>
                 {% include "_event_location_picker.html" %}
+
+                <div class="col-full">
+                    <label for="purpose_issue">清掃目的・この場所の地域課題（任意）：</label>
+                    <input id="purpose_issue" type="text" name="purpose_issue" value="{{ event.purpose_issue or '' }}" maxlength="500" placeholder="例：週末に飲料容器のポイ捨てが集中するため重点清掃を実施" class="input-field">
+                </div>
 
                 <div class="col-full">
                     <label for="category">イベントのジャンル</label>

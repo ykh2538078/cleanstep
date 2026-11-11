@@ -163,6 +163,20 @@
                     <input type="text" name="description" value="{{ bin.description }}" required class="input-field">
                 </div>
 
+                <div class="col-half">
+                    <label>回収対象の分別区分：</label>
+                    <input type="text" name="waste_types" value="{{ bin.waste_types or 'ペットボトル・カップ・容器' }}" placeholder="例：ペットボトル・空き缶・プラ容器" class="input-field">
+                </div>
+
+                <div class="col-half">
+                    <label>現在の稼働状態：</label>
+                    <select name="bin_status" class="input-field">
+                        <option value="active" {% if bin.bin_status == 'active' or not bin.bin_status %}selected{% endif %}>通常稼働（利用可能）</option>
+                        <option value="full_reported" {% if bin.bin_status == 'full_reported' %}selected{% endif %}>満杯報告あり（回収待ち）</option>
+                        <option value="maintenance" {% if bin.bin_status == 'maintenance' %}selected{% endif %}>点検・回収中</option>
+                    </select>
+                </div>
+
                 {% include "_bin_location_picker.html" %}
 
             </div>

@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>地域改善提案・アクションプラン | CleanStep</title>
+    <style>
+        body { font-family: 'Helvetica Neue', Arial, sans-serif; margin: 0; background: #f4f7f6; color: #263238; }
+        .header { background: linear-gradient(135deg, #257a52, #17633f); color: #fff; padding: 28px 20px 22px; text-align: center; }
+        .header h1 { margin: 0 0 6px; font-size: 24px; }
+        .header p { margin: 0; font-size: 13px; opacity: .92; }
+        .container { max-width: 1080px; margin: 22px auto; padding: 0 16px 40px; }
+        .layout-grid { display: grid; grid-template-columns: 1fr 1.25fr; gap: 22px; align-items: start; }
+        @media (max-width: 860px) { .layout-grid { grid-template-columns: 1fr; } }
+        .card { background: #fff; border: 1px solid #dce5e1; border-radius: 14px; padding: 22px; margin-bottom: 18px; box-shadow: 0 4px 14px rgba(0,0,0,.04); }
+        .card h2 { margin: 0 0 12px; font-size: 17px; color: #17633f; border-left: 4px solid #2ecc71; padding-left: 9px; }
+        label { display: block; font-weight: 700; font-size: 13px; margin: 12px 0 5px; color: #34495e; }
+        input[type="text"], select, textarea { width: 100%; box-sizing: border-box; padding: 11px; border: 1px solid #ccd6d2; border-radius: 8px; font: inherit; font-size: 14px; background: #fcfcfc; }
+        textarea { min-height: 90px; resize: vertical; }
+        .submit-btn { width: 100%; margin-top: 14px; padding: 14px; border: 0; border-radius: 26px; background: linear-gradient(135deg, #2ecc71, #27ae60); color: #fff; font-size: 15px; font-weight: 700; cursor: pointer; }
+        .proposal-item { border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px; margin-bottom: 12px; background: #fcfefd; }
+        .badge { display: inline-block; padding: 3px 9px; border-radius: 999px; font-size: 11px; font-weight: 700; }
+        .badge-type { background: #e0f2fe; color: #0369a1; }
+        .badge-status-proposed { background: #fef3c7; color: #92400e; }
+        .badge-status-under_review { background: #e0e7ff; color: #3730a3; }
+        .badge-status-adopted, .badge-status-completed { background: #dcfce7; color: #166534; }
+        .support-btn { display: inline-flex; align-items: center; gap: 5px; padding: 7px 14px; border: 1px solid #257a52; border-radius: 20px; background: #eef7f1; color: #17633f; font-size: 12px; font-weight: 700; cursor: pointer; }
+        .support-btn.supported { background: #257a52; color: #fff; }
+        .hotspot-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #edf2f7; font-size: 13px; }
+        .flash-msg { padding: 12px 16px; border-radius: 10px; background: #eef7f1; border: 1px solid #ccebdd; color: #17633f; margin-bottom: 16px; font-weight: 700; }
+        .error-msg { padding: 12px 16px; border-radius: 10px; background: #fff0ef; border: 1px solid #f1b9b5; color: #8f241f; margin-bottom: 16px; font-weight: 700; }
+    </style>
+</head>
+<body data-view-mode="{{ view_mode }}">
+    {% include "_user_navigation.html" %}
+    <div class="header">
+        <h1>💡 地域改善提案・アクションプラン</h1>
+        <p>課題報告と活動データをもとに、ごみ箱の増設や重点清掃など「地域の仕組み改善」を提案・共感するボード</p>
+    </div>
+    <div class="container">
+        {% for category, message in get_flashed_messages(with_categories=true) %}
+            <div class="flash-msg" role="status">{{ message }}</div>
+        {% endfor %}
+        {% if error_msg %}
+            <div class="error-msg" role="alert">{{ error_msg }}</div>
+        {% endif %}
+
+        <div class="layout-grid">
+            <div>
+                <div class="card">
+                    <h2>🚀 新しい改善アクションを提案する</h2>
+                    <form method="POST" action="{{ url_for('improvement_proposals_board') }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <label for="title">提案タイトル</label>
+                        <input id="title" name="title" type="text" maxlength="100" required value="{{ form.title }}" placeholder="例：自販機横へのペットボトル回収箱の増設">
+
+                        <label for="location">対象場所・エリア</label>
+                        <input id="location" name="location" type="text" maxlength="200" required value="{{ form.location }}" placeholder="例：横浜みなとみらい公園 ベンチ周辺">
+
+                        <label for="proposal_type">改善アクションの区分</label>
+                        <select id="proposal_type" name="proposal_type">
+                            {% for ptype in proposal_types %}
+                                <option value="{{ ptype }}" {% if form.proposal_type == ptype %}selected{% endif %}>{{ ptype }}</option>
+                            {% endfor %}
+                        </select>
+
+                        <label for="issue_report_id">根拠となる地域課題報告（任意）</label>
+                        <select id="issue_report_id" name="issue_report_id">
+                            <option value="">（特定の課題報告を指定しない）</option>
+                            {% for issue in issues %}
+                                <option value="{{ issue.id }}" {% if form.issue_report_id|string == issue.id|string %}selected{% endif %}>
+                                    #{{ issue.id }} {{ issue.title }}（{{ issue.location }}）
+                                </option>
+                            {% endfor %}
+                        </select>
+
+                        <label for="description">提案内容・期待される効果</label>
+                        <textarea id="description" name="description" maxlength="500" required placeholder="なぜこの対策が必要か、活動や課題報告で気づいた根拠を記入してください。">{{ form.description }}</textarea>
+
+                        <button type="submit" class="submit-btn">💡 改善提案を投稿する</button>
+                    </form>
+                </div>
+
+                <div class="card">
+                    <h2>📍 課題報告が集中している場所（分析ヒント）</h2>
+                    {% if location_hotspots %}
+                        {% for spot in location_hotspots %}
+                            <div class="hotspot-row">
+                                <span><strong>{{ spot.location }}</strong></span>
+                                <span>報告 {{ spot.report_count }} 件（未解決 {{ spot.open_count }} 件）</span>
+                            </div>
+                        {% endfor %}
+                    {% else %}
+                        <p style="font-size:13px; color:#64748b;">まだ課題報告データがありません。</p>
+                    {% endif %}
+                </div>
+            </div>
+
+            <div>
+                <div class="card">
+                    <h2>📋 みんなの地域改善提案一覧（{{ proposals|length }} 件）</h2>
+                    {% set status_labels = {'proposed': '提案中', 'under_review': '自治体・団体で検討中', 'adopted': '採用・実施決定', 'completed': '対策完了'} %}
+                    {% for p in proposals %}
+                        <article class="proposal-item">
+                            <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px; flex-wrap:wrap;">
+                                <div>
+                                    <span class="badge badge-type">{{ p.proposal_type }}</span>
+                                    <span class="badge badge-status-{{ p.status }}">{{ status_labels.get(p.status, p.status) }}</span>
+                                </div>
+                                <small style="color:#64748b;">{{ p.created_at|jst_datetime }}</small>
+                            </div>
+                            <h3 style="margin:8px 0 4px; font-size:16px; color:#1e293b;">{{ p.title }}</h3>
+                            <div style="font-size:12px; color:#475569; margin-bottom:8px;">
+                                📍 対象場所：<strong>{{ p.location }}</strong> ｜ 投稿者：{{ p.author_name or 'ユーザー' }}
+                                {% if p.issue_title %}
+                                    <br>🚩 関連課題：{{ p.issue_title }}
+                                {% endif %}
+                            </div>
+                            <p style="margin:0 0 10px; font-size:13px; line-height:1.6; color:#334155; white-space:pre-line;">{{ p.description }}</p>
+                            {% if p.admin_comment %}
+                                <div style="padding:8px 12px; border-radius:8px; background:#f0fdf4; border-left:3px solid #257a52; font-size:12px; color:#166534; margin-bottom:10px;">
+                                    <strong>管理者・団体からのコメント：</strong> {{ p.admin_comment }}
+                                </div>
+                            {% endif %}
+                            <div style="display:flex; justify-content:space-between; align-items:center;">
+                                <form method="POST" action="{{ url_for('support_improvement_proposal', proposal_id=p.id) }}" style="margin:0;">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                    <button type="submit" class="support-btn {{ 'supported' if p.supported_by_me }}">
+                                        👍 共感・賛同する（{{ p.support_count }}）
+                                    </button>
+                                </form>
+                                <a href="{{ url_for('regional_map') }}" style="font-size:12px; color:#257a52; font-weight:700;">マップで確認 →</a>
+                            </div>
+                        </article>
+                    {% else %}
+                        <p style="font-size:14px; color:#64748b;">まだ改善提案はありません。左のフォームから最初の提案を投稿してみましょう！</p>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

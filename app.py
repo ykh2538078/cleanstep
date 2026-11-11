@@ -52,6 +52,7 @@ app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SECURE=APP_ENV in {'production', 'staging'},
     SESSION_COOKIE_SAMESITE='Lax',
+    TEMPLATES_AUTO_RELOAD=True,
 )
 
 def resolve_configured_path(value, default):
@@ -130,7 +131,7 @@ def _create_user_notifications_table(conn):
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             read_at TEXT,
             FOREIGN KEY (user_id) REFERENCES users(id),
-            FOREIGN KEY (event_id) REFERENCES events(id)
+            FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE SET NULL
         )
     ''')
 
@@ -432,6 +433,10 @@ def init_db():
                         event['id'],
                     ),
                 )
+        if 'purpose_issue' not in event_cols:
+            conn.execute(
+                "ALTER TABLE events ADD COLUMN purpose_issue TEXT NOT NULL DEFAULT ''"
+            )
         conn.execute('CREATE INDEX IF NOT EXISTS idx_events_review_status_datetime ON events(review_status, datetime)')
 
         conn.execute('''
@@ -441,6 +446,7 @@ def init_db():
                 event_id INTEGER NOT NULL,
                 status TEXT NOT NULL DEFAULT 'reserved'
                     CHECK(status IN ('reserved', 'cancelled', 'completed')),
+                participant_role TEXT NOT NULL DEFAULT 'ごみ回収・分別',
                 reserved_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 completed_at TEXT,
                 UNIQUE(user_id, event_id),
@@ -448,6 +454,13 @@ def init_db():
                 FOREIGN KEY (event_id) REFERENCES events(id)
             )
         ''')
+        reservation_cols = [
+            row['name'] for row in conn.execute('PRAGMA table_info(event_reservations)').fetchall()
+        ]
+        if 'participant_role' not in reservation_cols:
+            conn.execute(
+                "ALTER TABLE event_reservations ADD COLUMN participant_role TEXT NOT NULL DEFAULT 'ごみ回収・分別'"
+            )
         conn.execute('CREATE INDEX IF NOT EXISTS idx_event_reservations_event_status ON event_reservations(event_id, status)')
 
         notification_table = conn.execute('''
@@ -458,9 +471,12 @@ def init_db():
             'event_added', 'reservation', 'reservation_cancelled',
             'activity_completed',
         )
-        if notification_table and not all(
-            f"'{notification_type}'" in notification_table['sql']
-            for notification_type in required_notification_types
+        if notification_table and (
+            not all(
+                f"'{notification_type}'" in notification_table['sql']
+                for notification_type in required_notification_types
+            )
+            or 'ON DELETE SET NULL' not in notification_table['sql'].upper()
         ):
             conn.execute('DROP INDEX IF EXISTS idx_user_notifications_reminder_once')
             conn.execute('DROP INDEX IF EXISTS idx_user_notifications_user_unread')
@@ -497,7 +513,91 @@ def init_db():
                 description TEXT NOT NULL,
                 lat REAL NOT NULL CHECK(lat >= -90 AND lat <= 90),
                 lng REAL NOT NULL CHECK(lng >= -180 AND lng <= 180),
+                waste_types TEXT NOT NULL DEFAULT 'ペットボトル・カップ・容器',
+                bin_status TEXT NOT NULL DEFAULT 'active'
+                    CHECK(bin_status IN ('active', 'full_reported', 'maintenance')),
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        bin_cols = [
+            row['name']
+            for row in conn.execute('PRAGMA table_info(trash_bins)').fetchall()
+        ]
+        if 'waste_types' not in bin_cols:
+            conn.execute(
+                "ALTER TABLE trash_bins ADD COLUMN waste_types TEXT NOT NULL DEFAULT 'ペットボトル・カップ・容器'"
+            )
+        if 'bin_status' not in bin_cols:
+            conn.execute(
+                "ALTER TABLE trash_bins ADD COLUMN bin_status TEXT NOT NULL DEFAULT 'active'"
+            )
+
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS issue_reports (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                location TEXT NOT NULL,
+                latitude REAL CHECK(latitude IS NULL OR (latitude >= -90 AND latitude <= 90)),
+                longitude REAL CHECK(longitude IS NULL OR (longitude >= -180 AND longitude <= 180)),
+                trash_type TEXT NOT NULL DEFAULT 'ペットボトル・飲料容器',
+                severity TEXT NOT NULL DEFAULT 'medium'
+                    CHECK(severity IN ('low', 'medium', 'high')),
+                description TEXT,
+                image_path TEXT,
+                ai_detected_count INTEGER,
+                status TEXT NOT NULL DEFAULT 'open'
+                    CHECK(status IN ('open', 'in_progress', 'resolved')),
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            )
+        ''')
+        conn.execute('''
+            CREATE INDEX IF NOT EXISTS idx_issue_reports_status_created
+            ON issue_reports(status, created_at DESC)
+        ''')
+        issue_cols = [
+            row['name'] for row in conn.execute('PRAGMA table_info(issue_reports)').fetchall()
+        ]
+        if 'action_note' not in issue_cols:
+            conn.execute(
+                "ALTER TABLE issue_reports ADD COLUMN action_note TEXT NOT NULL DEFAULT ''"
+            )
+        if 'reviewed_by' not in issue_cols:
+            conn.execute(
+                'ALTER TABLE issue_reports ADD COLUMN reviewed_by INTEGER REFERENCES users(id)'
+            )
+        if 'reviewed_at' not in issue_cols:
+            conn.execute('ALTER TABLE issue_reports ADD COLUMN reviewed_at TEXT')
+
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS improvement_proposals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                author_role TEXT NOT NULL DEFAULT 'user'
+                    CHECK(author_role IN ('user', 'organizer', 'admin')),
+                title TEXT NOT NULL,
+                location TEXT NOT NULL,
+                proposal_type TEXT NOT NULL DEFAULT 'ごみ箱の増設・配置見直し',
+                issue_report_id INTEGER REFERENCES issue_reports(id) ON DELETE SET NULL,
+                description TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'proposed'
+                    CHECK(status IN ('proposed', 'under_review', 'adopted', 'completed')),
+                support_count INTEGER NOT NULL DEFAULT 0,
+                admin_comment TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            )
+        ''')
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS improvement_proposal_supports (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                proposal_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(proposal_id, user_id),
+                FOREIGN KEY (proposal_id) REFERENCES improvement_proposals(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users(id)
             )
         ''')
 
@@ -700,6 +800,10 @@ def init_db():
             'action_note': "TEXT NOT NULL DEFAULT '' CHECK(length(action_note) <= 500)",
             'reviewed_by': 'INTEGER REFERENCES users(id)',
             'reviewed_at': 'TEXT',
+            'noticed_issue': "TEXT NOT NULL DEFAULT ''",
+            'suspected_cause': "TEXT NOT NULL DEFAULT ''",
+            'collaboration_note': "TEXT NOT NULL DEFAULT ''",
+            'next_improvement': "TEXT NOT NULL DEFAULT ''",
         }
         for column, definition in feedback_migrations.items():
             if column not in feedback_cols:
@@ -737,6 +841,11 @@ def init_db():
             ),
             'detox_duration': 'INTEGER DEFAULT 0',
             'date': 'TEXT',
+            'trash_category': "TEXT NOT NULL DEFAULT 'ペットボトル・飲料容器'",
+            'bag_size': "TEXT NOT NULL DEFAULT '手持ち・少量（1〜3個）'",
+            'participant_role': "TEXT NOT NULL DEFAULT ''",
+            'before_state': "TEXT NOT NULL DEFAULT ''",
+            'after_state': "TEXT NOT NULL DEFAULT ''",
         }
         for column, definition in activity_column_migrations.items():
             if column not in activity_cols:
@@ -819,6 +928,8 @@ def init_db():
             ''')
         if 'image_sha256' not in ai_log_cols:
             conn.execute('ALTER TABLE ai_logs ADD COLUMN image_sha256 TEXT')
+        if 'detected_classes_json' not in ai_log_cols:
+            conn.execute('ALTER TABLE ai_logs ADD COLUMN detected_classes_json TEXT')
         conn.execute('''
             CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_logs_image_sha256
             ON ai_logs(image_sha256)
@@ -1048,8 +1159,8 @@ def init_db():
                     'デモ団体 清掃イベント', '横浜みなとみらい公園',
                     (datetime.now(JST) + timedelta(days=30)).strftime('%Y-%m-%d %H:%M'),
                     50, '参加者に地域店舗で使えるドリンク引換券を配布（先着30名）',
-                    demo_organization['id'], 'デモ団体 清掃イベント',
                     demo_organization['id'], 'まち・道路清掃',
+                    'デモ団体 清掃イベント', demo_organization['id'],
                 ))
         conn.execute('''
             UPDATE events SET name = 'みなとみらい清掃イベント'
@@ -1166,7 +1277,7 @@ def organizer_required(func):
 
         if not organization_id:
             flash('団体機能は、審査で承認された団体メンバーのみ利用できます。', 'info')
-            return redirect(url_for('home'))
+            return redirect(url_for('organizer_apply'))
         return func(*args, **kwargs)
     return wrapper
 
@@ -1311,6 +1422,29 @@ def event_started(value):
     except (TypeError, ValueError):
         return False
 
+def _detect_view_mode():
+    query_mode = (request.args.get('view') or '').strip().lower()
+    if query_mode in ('mobile', 'pc', 'auto'):
+        session['view_mode'] = query_mode
+    saved_mode = session.get('view_mode', 'auto')
+    if saved_mode in ('mobile', 'pc'):
+        return saved_mode
+    ua = (request.headers.get('User-Agent') or '').lower()
+    if any(token in ua for token in ('mobile', 'android', 'iphone', 'ipod', 'iemobile')):
+        return 'mobile'
+    return 'pc'
+
+
+@app.route('/view-mode/<mode>')
+def switch_view_mode(mode):
+    if mode in ('mobile', 'pc', 'auto'):
+        session['view_mode'] = mode
+    next_url = request.args.get('next') or request.referrer or url_for('home')
+    if not next_url.startswith('/') or next_url.startswith('//'):
+        next_url = url_for('home')
+    return redirect(next_url)
+
+
 @app.context_processor
 def inject_csrf_token():
     if 'csrf_token' not in session:
@@ -1326,9 +1460,12 @@ def inject_csrf_token():
             ''', (session['user_id'],)).fetchone()[0]
         finally:
             conn.close()
+    effective_view = _detect_view_mode()
     return {
         'csrf_token': session['csrf_token'],
         'unread_notifications': unread_notifications,
+        'view_mode': effective_view,
+        'saved_view_mode': session.get('view_mode', 'auto'),
     }
 
 
@@ -1637,9 +1774,122 @@ def generate_user_report(conn, user_id):
         )
     ]
 
+    trash_bin_actions = conn.execute('''
+        SELECT COUNT(*) FROM activity_history
+        WHERE user_id = ? AND type = 'trash_bin'
+    ''', (user_id,)).fetchone()[0]
+
+    issue_report_count = 0
+    try:
+        issue_report_count = conn.execute('''
+            SELECT COUNT(*) FROM issue_reports WHERE user_id = ?
+        ''', (user_id,)).fetchone()[0]
+    except sqlite3.OperationalError:
+        issue_report_count = 0
+
+    # SQLite strftime('%w') returns 0=Sunday .. 6=Saturday
+    weekday_rows = conn.execute('''
+        SELECT strftime('%w', datetime(date, '+9 hours')) AS wday,
+               COUNT(*) AS cnt
+        FROM activity_history
+        WHERE user_id = ? AND date IS NOT NULL
+        GROUP BY wday
+    ''', (user_id,)).fetchall()
+    wday_map = {row['wday']: row['cnt'] for row in weekday_rows if row['wday'] is not None}
+    weekday_order = [
+        ('1', '月'), ('2', '火'), ('3', '水'), ('4', '木'),
+        ('5', '金'), ('6', '土'), ('0', '日'),
+    ]
+    weekday_trends = [
+        {'key': key, 'label': label, 'count': wday_map.get(key, 0)}
+        for key, label in weekday_order
+    ]
+    max_weekday = max(weekday_trends, key=lambda item: item['count'])
+    most_active_weekday = (
+        f"{max_weekday['label']}曜日" if max_weekday['count'] > 0 else 'データ蓄積中'
+    )
+
+    recent_reflections = []
+    try:
+        recent_reflections = [
+            dict(row) for row in conn.execute('''
+                SELECT f.satisfaction, f.comment, f.noticed_issue,
+                       f.suspected_cause, f.collaboration_note,
+                       f.next_improvement, f.action_status, f.action_note,
+                       f.submitted_at, e.name AS event_name
+                FROM event_feedback f
+                JOIN events e ON e.id = f.event_id
+                WHERE f.user_id = ?
+                ORDER BY f.submitted_at DESC, f.id DESC
+                LIMIT 5
+            ''', (user_id,)).fetchall()
+        ]
+    except sqlite3.OperationalError:
+        recent_reflections = []
+
+    proposal_count = 0
+    try:
+        proposal_count = conn.execute(
+            'SELECT COUNT(*) FROM improvement_proposals WHERE user_id = ?',
+            (user_id,),
+        ).fetchone()[0]
+    except sqlite3.OperationalError:
+        proposal_count = 0
+
+    verified_ai_count = 0
+    try:
+        verified_ai_count = conn.execute('''
+            SELECT COUNT(*)
+            FROM activity_verifications v
+            JOIN ai_logs l ON l.id = v.ai_log_id
+            WHERE l.user_id = ? AND v.target_type = 'ai_result' AND v.status = 'confirmed'
+        ''', (user_id,)).fetchone()[0]
+    except sqlite3.OperationalError:
+        verified_ai_count = 0
+
+    contribution_badges = []
+    if trash_bin_actions >= 1:
+        contribution_badges.append({
+            'icon': '📸',
+            'title': 'エコごみ箱サポーター',
+            'desc': f'日常のごみ捨てを {trash_bin_actions} 回実践',
+        })
+    if my_events >= 1:
+        contribution_badges.append({
+            'icon': '🤝',
+            'title': '地域クリーンメンバー',
+            'desc': f'清掃イベントに {my_events} 回参加',
+        })
+    if issue_report_count >= 1:
+        contribution_badges.append({
+            'icon': '🚩',
+            'title': '地域課題ウォッチャー',
+            'desc': f'地域の課題を {issue_report_count} 件発見・共有',
+        })
+    if len(recent_reflections) >= 1 or proposal_count >= 1:
+        contribution_badges.append({
+            'icon': '💡',
+            'title': '地域改善プランナー',
+            'desc': '活動の振り返り・改善提案で街づくりに貢献',
+        })
+    if not contribution_badges:
+        contribution_badges.append({
+            'icon': '🌱',
+            'title': 'CleanStep チャレンジャー',
+            'desc': '最初の1歩（ごみ捨て・課題報告・イベント参加）を踏み出しましょう',
+        })
+
     return {
         "my_total_trash": my_trash,
         "my_event_count": my_events,
+        "my_trash_bin_action_count": trash_bin_actions,
+        "my_issue_report_count": issue_report_count,
+        "my_proposal_count": proposal_count,
+        "verified_ai_count": verified_ai_count,
+        "contribution_badges": contribution_badges,
+        "weekday_trends": weekday_trends,
+        "most_active_weekday": most_active_weekday,
+        "recent_reflections": recent_reflections,
         "monthly_trends": [dict(month) for month in monthly_trends],
         "current_month": {
             'label': current_month.strftime('%Y年%m月'),
@@ -1740,7 +1990,7 @@ def home():
             WHERE r.user_id = ? AND r.status = 'reserved'
                 AND e.status = 'open' AND e.review_status = 'approved'
         """, (user_id,)).fetchone()[0]
-        next_reserved_event = conn.execute("""
+        my_reserved_events = conn.execute("""
             SELECT e.*,
                    (SELECT COUNT(*) FROM event_reservations active_r
                     WHERE active_r.event_id = e.id
@@ -1751,8 +2001,15 @@ def home():
                 AND e.status = 'open' AND e.review_status = 'approved'
                 AND e.datetime >= datetime('now', '+9 hours')
             ORDER BY e.datetime
-            LIMIT 1
-        """, (user_id,)).fetchone()
+            LIMIT 3
+        """, (user_id,)).fetchall()
+        next_reserved_event = my_reserved_events[0] if my_reserved_events else None
+        history = conn.execute('''
+            SELECT * FROM activity_history
+            WHERE user_id = ?
+            ORDER BY date DESC, id DESC
+            LIMIT 5
+        ''', (user_id,)).fetchall()
         available_events = [
             event for event in events
             if event['id'] not in joined_events
@@ -1773,29 +2030,48 @@ def home():
         activity_schedule = build_recommended_activity_schedule(
             available_events, preferred_categories
         )
+        recent_issues = []
+        try:
+            recent_issues = conn.execute('''
+                SELECT * FROM issue_reports
+                ORDER BY created_at DESC, id DESC
+                LIMIT 5
+            ''').fetchall()
+        except sqlite3.OperationalError:
+            recent_issues = []
         conn.close()
 
         user_dict = dict(user)
         user_dict['today_points'] = today_sum
+        application_pending = (
+            organization_application is not None
+            and organization_application['status'] == 'pending'
+        )
+        organizer_status = (
+            'approved'
+            if organizer_access
+            else ('pending' if application_pending else 'none')
+        )
         
         return render_template(
             'menu.html', 
             user=user_dict, events=events[:3], event_count=all_event_count,
             stats=stats,
-            organization_application_pending=(
-                organization_application is not None
-                and organization_application['status'] == 'pending'
-            ),
+            organization_application_pending=application_pending,
             organizer_access=organizer_access,
+            organizer_status=organizer_status,
             show_onboarding=(
                 not user['onboarding_completed']
                 and not session.get('onboarding_dismissed')
             ),
             reserved_events=reserved_events,
+            my_reserved_events=my_reserved_events,
             next_reserved_event=next_reserved_event,
             reserved_event_count=all_reserved_event_count,
             joined_events=joined_events,
             my_report=my_report,
+            history=history,
+            recent_issues=recent_issues,
             recommended_events=recommended_events,
             activity_schedule=activity_schedule,
         )
@@ -1964,6 +2240,522 @@ def index():
     if 'role' in session:
         return redirect(url_for('admin_dashboard') if session['role'] == 'admin' else url_for('home'))
     return redirect(url_for('login'))
+
+
+ISSUE_TRASH_TYPES = (
+    'ペットボトル・飲料容器',
+    '空き缶・ビン',
+    'タバコ・吸い殻',
+    'ビニール・プラスチック',
+    '不法投棄・粗大ごみ',
+    'ごみ箱満杯・破損',
+    'その他',
+)
+
+
+@app.route('/map')
+@user_required
+def regional_map():
+    conn = get_db()
+    try:
+        bins = [
+            dict(row) for row in conn.execute('''
+                SELECT b.*,
+                       (SELECT COUNT(*) FROM activity_history a
+                        WHERE a.type = 'trash_bin' AND a.title = b.name) AS usage_count
+                FROM trash_bins b
+                ORDER BY b.name
+            ''').fetchall()
+        ]
+        events = [
+            dict(row) for row in conn.execute('''
+                SELECT e.id, e.name, e.location, e.latitude, e.longitude,
+                       e.datetime, e.bonus_points, e.category,
+                       (SELECT COUNT(*) FROM event_reservations r
+                        WHERE r.event_id = e.id AND r.status = 'reserved') AS reserved_count,
+                       e.capacity
+                FROM events e
+                WHERE e.status = 'open' AND e.review_status = 'approved'
+                    AND e.datetime >= datetime('now', '+9 hours')
+                ORDER BY e.datetime
+            ''').fetchall()
+        ]
+        issues = []
+        hotspot_locations = []
+        try:
+            issues = [
+                dict(row) for row in conn.execute('''
+                    SELECT i.*, u.name AS reporter_name
+                    FROM issue_reports i
+                    LEFT JOIN users u ON u.id = i.user_id
+                    ORDER BY i.created_at DESC, i.id DESC
+                    LIMIT 50
+                ''').fetchall()
+            ]
+            hotspot_locations = [
+                dict(row) for row in conn.execute('''
+                    SELECT location, COUNT(*) AS report_count,
+                           SUM(CASE WHEN status != 'resolved' THEN 1 ELSE 0 END) AS open_count,
+                           GROUP_CONCAT(DISTINCT trash_type) AS trash_types
+                    FROM issue_reports
+                    GROUP BY location
+                    ORDER BY open_count DESC, report_count DESC
+                    LIMIT 5
+                ''').fetchall()
+            ]
+        except sqlite3.OperationalError:
+            issues = []
+            hotspot_locations = []
+        full_bins_count = sum(1 for b in bins if b.get('bin_status') == 'full_reported')
+        open_issues_count = sum(1 for i in issues if i.get('status') != 'resolved')
+        return render_template(
+            'regional_map.html',
+            bins=bins,
+            events=events,
+            issues=issues,
+            hotspot_locations=hotspot_locations,
+            full_bins_count=full_bins_count,
+            open_issues_count=open_issues_count,
+        )
+    finally:
+        conn.close()
+
+
+@app.route('/issues/report', methods=['GET', 'POST'])
+@user_required
+def issue_report_new():
+    user_id = session['user_id']
+    form_values = {
+        'title': '',
+        'location': '',
+        'latitude': '',
+        'longitude': '',
+        'trash_type': ISSUE_TRASH_TYPES[0],
+        'severity': 'medium',
+        'description': '',
+    }
+    error_msg = None
+    if request.method == 'POST':
+        if not validate_csrf():
+            return 'CSRFトークンが不正です。', 400
+        title = (request.form.get('title') or '').strip()
+        location = (request.form.get('location') or '').strip()
+        raw_lat = (request.form.get('latitude') or '').strip()
+        raw_lng = (request.form.get('longitude') or '').strip()
+        trash_type = (request.form.get('trash_type') or ISSUE_TRASH_TYPES[0]).strip()
+        severity = (request.form.get('severity') or 'medium').strip()
+        description = (request.form.get('description') or '').strip()
+        form_values.update({
+            'title': title,
+            'location': location,
+            'latitude': raw_lat,
+            'longitude': raw_lng,
+            'trash_type': trash_type,
+            'severity': severity,
+            'description': description,
+        })
+        if not title or len(title) > 100:
+            error_msg = '課題のタイトルを1〜100文字で入力してください。'
+        elif not location or len(location) > 200:
+            error_msg = '発見場所（目安）を1〜200文字で入力してください。'
+        elif trash_type not in ISSUE_TRASH_TYPES:
+            error_msg = 'ごみの種類・課題区分を選択してください。'
+        elif severity not in ('low', 'medium', 'high'):
+            error_msg = '状況の深刻度を選択してください。'
+        elif len(description) > 500:
+            error_msg = '詳細メモは500文字以内で入力してください。'
+        else:
+            lat = lng = None
+            if raw_lat or raw_lng:
+                try:
+                    lat = float(raw_lat)
+                    lng = float(raw_lng)
+                    if (
+                        not math.isfinite(lat)
+                        or not math.isfinite(lng)
+                        or not (-90 <= lat <= 90)
+                        or not (-180 <= lng <= 180)
+                    ):
+                        raise ValueError
+                except ValueError:
+                    error_msg = '位置情報の座標が正しくありません。'
+
+        if not error_msg:
+            image_path = None
+            ai_detected = None
+            file = request.files.get('issue_image')
+            if file and file.filename:
+                if not allowed_file(file.filename):
+                    error_msg = '対応していない画像ファイル形式です。'
+                else:
+                    try:
+                        img = Image.open(file)
+                        img.verify()
+                        file.seek(0)
+                        ext = file.filename.rsplit('.', 1)[1].lower()
+                        unique_filename = f"issue_{uuid.uuid4()}.{ext}"
+                        image_path = os.path.join(UPLOAD_FOLDER, unique_filename)
+                        file.save(image_path)
+                        detector = get_model()
+                        if detector is not None:
+                            results = detector.predict(
+                                image_path, imgsz=640, conf=0.25,
+                                verbose=False, max_det=20,
+                            )
+                            ai_detected = sum(
+                                1
+                                for result in results
+                                for box in result.boxes
+                                if int(box.cls) in (39, 41)
+                            )
+                    except Exception:
+                        app.logger.exception('課題報告画像の検証またはAI推定エラー')
+
+        if not error_msg:
+            conn = get_db()
+            try:
+                with conn:
+                    conn.execute('''
+                        INSERT INTO issue_reports (
+                            user_id, title, location, latitude, longitude,
+                            trash_type, severity, description, image_path,
+                            ai_detected_count, status
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')
+                    ''', (
+                        user_id, title, location, lat, lng,
+                        trash_type, severity, description, image_path,
+                        ai_detected,
+                    ))
+                    if trash_type == 'ごみ箱満杯・破損':
+                        conn.execute('''
+                            UPDATE trash_bins SET bin_status = 'full_reported'
+                            WHERE name = ?
+                        ''', (location,))
+                    conn.execute('''
+                        INSERT INTO user_notifications (
+                            user_id, notification_type, title, message
+                        ) VALUES (?, 'activity_completed', ?, ?)
+                    ''', (
+                        user_id,
+                        f'地域課題を報告しました：{title}',
+                        f'場所：{location}\n種類：{trash_type}\n地域マップに共有されました。',
+                    ))
+                flash('地域の課題報告を送信しました。地域マップに反映されました。', 'success')
+                return redirect(url_for('regional_map'))
+            finally:
+                conn.close()
+
+    return render_template(
+        'issue_report.html',
+        form=form_values,
+        trash_types=ISSUE_TRASH_TYPES,
+        error_msg=error_msg,
+    )
+
+
+PROPOSAL_TYPES = (
+    'ごみ箱の増設・配置見直し',
+    '重点清掃イベントの開催',
+    '分別案内・啓発サインの設置',
+    '巡回・再発防止対策',
+)
+
+
+@app.route('/proposals', methods=['GET', 'POST'])
+@user_required
+def improvement_proposals_board():
+    user_id = session['user_id']
+    error_msg = None
+    form_values = {
+        'title': '',
+        'location': request.args.get('location', '').strip(),
+        'proposal_type': PROPOSAL_TYPES[0],
+        'issue_report_id': request.args.get('issue_id', '').strip(),
+        'description': '',
+    }
+    conn = get_db()
+    try:
+        if request.method == 'POST':
+            if not validate_csrf():
+                return 'CSRFトークンが不正です。', 400
+            title = (request.form.get('title') or '').strip()
+            location = (request.form.get('location') or '').strip()
+            proposal_type = (request.form.get('proposal_type') or PROPOSAL_TYPES[0]).strip()
+            raw_issue_id = (request.form.get('issue_report_id') or '').strip()
+            description = (request.form.get('description') or '').strip()
+            form_values.update({
+                'title': title,
+                'location': location,
+                'proposal_type': proposal_type,
+                'issue_report_id': raw_issue_id,
+                'description': description,
+            })
+            if not title or len(title) > 100:
+                error_msg = '提案タイトルを1〜100文字で入力してください。'
+            elif not location or len(location) > 200:
+                error_msg = '対象場所・エリアを1〜200文字で入力してください。'
+            elif proposal_type not in PROPOSAL_TYPES:
+                error_msg = '提案区分を選択してください。'
+            elif not description or len(description) > 500:
+                error_msg = '提案内容・根拠を1〜500文字で入力してください。'
+            else:
+                issue_report_id = int(raw_issue_id) if raw_issue_id.isdigit() else None
+                if issue_report_id is not None:
+                    exists_issue = conn.execute(
+                        'SELECT 1 FROM issue_reports WHERE id = ?', (issue_report_id,)
+                    ).fetchone()
+                    if not exists_issue:
+                        issue_report_id = None
+                is_org = bool(get_user_organization_id(conn, user_id))
+                author_role = 'organizer' if is_org else 'user'
+                with conn:
+                    conn.execute('''
+                        INSERT INTO improvement_proposals (
+                            user_id, author_role, title, location, proposal_type,
+                            issue_report_id, description, status, support_count
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'proposed', 1)
+                    ''', (
+                        user_id, author_role, title, location, proposal_type,
+                        issue_report_id, description,
+                    ))
+                    proposal_id = conn.execute('SELECT last_insert_rowid()').fetchone()[0]
+                    conn.execute('''
+                        INSERT OR IGNORE INTO improvement_proposal_supports (proposal_id, user_id)
+                        VALUES (?, ?)
+                    ''', (proposal_id, user_id))
+                flash('地域改善の提案を投稿しました。', 'success')
+                return redirect(url_for('improvement_proposals_board'))
+
+        proposals = [
+            dict(row) for row in conn.execute('''
+                SELECT p.*, u.name AS author_name,
+                       i.title AS issue_title,
+                       EXISTS (
+                           SELECT 1 FROM improvement_proposal_supports s
+                           WHERE s.proposal_id = p.id AND s.user_id = ?
+                       ) AS supported_by_me
+                FROM improvement_proposals p
+                LEFT JOIN users u ON u.id = p.user_id
+                LEFT JOIN issue_reports i ON i.id = p.issue_report_id
+                ORDER BY p.support_count DESC, p.id DESC
+                LIMIT 50
+            ''', (user_id,)).fetchall()
+        ]
+        issues = conn.execute('''
+            SELECT id, title, location, trash_type, status
+            FROM issue_reports
+            ORDER BY id DESC LIMIT 30
+        ''').fetchall()
+        location_hotspots = conn.execute('''
+            SELECT location, COUNT(*) AS report_count,
+                   SUM(CASE WHEN status != 'resolved' THEN 1 ELSE 0 END) AS open_count
+            FROM issue_reports
+            GROUP BY location
+            ORDER BY report_count DESC, location
+            LIMIT 8
+        ''').fetchall()
+        return render_template(
+            'improvement_proposals.html',
+            proposals=proposals,
+            issues=issues,
+            location_hotspots=location_hotspots,
+            proposal_types=PROPOSAL_TYPES,
+            form=form_values,
+            error_msg=error_msg,
+        )
+    finally:
+        conn.close()
+
+
+@app.route('/proposals/<int:proposal_id>/support', methods=['POST'])
+@user_required
+def support_improvement_proposal(proposal_id):
+    if not validate_csrf():
+        return 'CSRFトークンが不正です。', 400
+    user_id = session['user_id']
+    conn = get_db()
+    try:
+        proposal = conn.execute(
+            'SELECT id FROM improvement_proposals WHERE id = ?', (proposal_id,)
+        ).fetchone()
+        if proposal is None:
+            return '提案が見つかりません。', 404
+        with conn:
+            cursor = conn.execute('''
+                INSERT OR IGNORE INTO improvement_proposal_supports (proposal_id, user_id)
+                VALUES (?, ?)
+            ''', (proposal_id, user_id))
+            if cursor.rowcount == 1:
+                conn.execute('''
+                    UPDATE improvement_proposals
+                    SET support_count = support_count + 1
+                    WHERE id = ?
+                ''', (proposal_id,))
+                flash('改善提案に賛同（共感）しました。', 'success')
+            else:
+                flash('この提案にはすでに賛同済みです。', 'info')
+        return redirect(url_for('improvement_proposals_board'))
+    finally:
+        conn.close()
+
+
+def _load_regional_issue_analytics(conn):
+    issues = conn.execute('''
+        SELECT i.*, u.name AS reporter_name
+        FROM issue_reports i
+        LEFT JOIN users u ON u.id = i.user_id
+        ORDER BY CASE i.status WHEN 'open' THEN 0 WHEN 'in_progress' THEN 1 ELSE 2 END,
+                 i.id DESC
+    ''').fetchall()
+    proposals = conn.execute('''
+        SELECT p.*, u.name AS author_name, i.title AS issue_title
+        FROM improvement_proposals p
+        LEFT JOIN users u ON u.id = p.user_id
+        LEFT JOIN issue_reports i ON i.id = p.issue_report_id
+        ORDER BY p.support_count DESC, p.id DESC
+    ''').fetchall()
+    by_trash_type = conn.execute('''
+        SELECT trash_type, COUNT(*) AS count,
+               COALESCE(SUM(ai_detected_count), 0) AS ai_total
+        FROM issue_reports
+        GROUP BY trash_type
+        ORDER BY count DESC
+    ''').fetchall()
+    by_location = conn.execute('''
+        SELECT location,
+               COUNT(*) AS issue_count,
+               SUM(CASE WHEN status = 'resolved' THEN 1 ELSE 0 END) AS resolved_count,
+               SUM(CASE WHEN status != 'resolved' THEN 1 ELSE 0 END) AS open_count
+        FROM issue_reports
+        GROUP BY location
+        ORDER BY issue_count DESC, location
+    ''').fetchall()
+    trash_category_stats = conn.execute('''
+        SELECT COALESCE(NULLIF(trash_category, ''), 'ペットボトル・飲料容器') AS category,
+               COUNT(*) AS record_count,
+               COALESCE(SUM(ai_detected_count), 0) AS ai_total
+        FROM activity_history
+        WHERE type = 'trash_bin'
+        GROUP BY COALESCE(NULLIF(trash_category, ''), 'ペットボトル・飲料容器')
+        ORDER BY record_count DESC
+    ''').fetchall()
+    event_state_changes = conn.execute('''
+        SELECT a.id, a.title, a.date, a.participant_role,
+               a.before_state, a.after_state, e.location
+        FROM activity_history a
+        LEFT JOIN events e ON e.id = a.event_id
+        WHERE a.type = 'event'
+          AND (a.before_state != '' OR a.after_state != '' OR a.participant_role != '')
+        ORDER BY a.id DESC
+        LIMIT 20
+    ''').fetchall()
+    return {
+        'issues': issues,
+        'proposals': proposals,
+        'by_trash_type': by_trash_type,
+        'by_location': by_location,
+        'trash_category_stats': trash_category_stats,
+        'event_state_changes': event_state_changes,
+    }
+
+
+@app.route('/admin/issues')
+@admin_required
+def admin_issues():
+    conn = get_db()
+    try:
+        data = _load_regional_issue_analytics(conn)
+        return render_template('admin_issues.html', is_admin=True, **data)
+    finally:
+        conn.close()
+
+
+@app.route('/organizer/issues')
+@organizer_required
+def organizer_issues():
+    conn = get_db()
+    try:
+        data = _load_regional_issue_analytics(conn)
+        return render_template('admin_issues.html', is_admin=False, **data)
+    finally:
+        conn.close()
+
+
+@app.route('/admin/issues/<int:issue_id>/status', methods=['POST'])
+@admin_required
+def admin_issue_status_update(issue_id):
+    if not validate_csrf():
+        return 'CSRFトークンが不正です。', 400
+    new_status = (request.form.get('status') or '').strip()
+    action_note = (request.form.get('action_note') or '').strip()[:500]
+    if new_status not in ('open', 'in_progress', 'resolved'):
+        return '不正なステータスです。', 400
+    conn = get_db()
+    try:
+        issue = conn.execute(
+            'SELECT * FROM issue_reports WHERE id = ?', (issue_id,)
+        ).fetchone()
+        if issue is None:
+            return '課題報告が見つかりません。', 404
+        status_label = {
+            'open': '未対応',
+            'in_progress': '対応中・現地確認中',
+            'resolved': '解決済み',
+        }[new_status]
+        with conn:
+            conn.execute('''
+                UPDATE issue_reports
+                SET status = ?, action_note = ?, reviewed_by = ?,
+                    reviewed_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            ''', (new_status, action_note, session['user_id'], issue_id))
+            if new_status == 'resolved' and issue['trash_type'] == 'ごみ箱満杯・破損':
+                conn.execute('''
+                    UPDATE trash_bins SET bin_status = 'active'
+                    WHERE name = ?
+                ''', (issue['location'],))
+            conn.execute('''
+                INSERT INTO user_notifications (
+                    user_id, notification_type, title, message
+                ) VALUES (?, 'organizer_message', ?, ?)
+            ''', (
+                issue['user_id'],
+                f'課題報告の対応状況更新：{issue["title"]}',
+                f'あなたが報告した「{issue["title"]}（{issue["location"]}）」の状況が「{status_label}」に更新されました。'
+                + (f'\n対応メモ：{action_note}' if action_note else ''),
+            ))
+        flash('課題報告の対応状況を更新しました。', 'success')
+        return redirect(url_for('admin_issues'))
+    finally:
+        conn.close()
+
+
+@app.route('/admin/proposals/<int:proposal_id>/status', methods=['POST'])
+@admin_required
+def admin_proposal_status_update(proposal_id):
+    if not validate_csrf():
+        return 'CSRFトークンが不正です。', 400
+    new_status = (request.form.get('status') or '').strip()
+    admin_comment = (request.form.get('admin_comment') or '').strip()[:500]
+    if new_status not in ('proposed', 'under_review', 'adopted', 'completed'):
+        return '不正なステータスです。', 400
+    conn = get_db()
+    try:
+        proposal = conn.execute(
+            'SELECT * FROM improvement_proposals WHERE id = ?', (proposal_id,)
+        ).fetchone()
+        if proposal is None:
+            return '改善提案が見つかりません。', 404
+        with conn:
+            conn.execute('''
+                UPDATE improvement_proposals
+                SET status = ?, admin_comment = ?
+                WHERE id = ?
+            ''', (new_status, admin_comment, proposal_id))
+        flash('改善提案のステータスを更新しました。', 'success')
+        return redirect(url_for('admin_issues'))
+    finally:
+        conn.close()
 
 # ==========================================
 # 現場アクション：エコごみ箱（修復・強化完了版）
@@ -2176,12 +2968,18 @@ def trash_bin_deposit():
             )
             ai_detected = 0
             conf_total = 0.0
+            class_counts = {'bottle': 0, 'cup': 0}
             valid_trash_classes = [39, 41]
             for result in results:
                 for box in result.boxes:
-                    if int(box.cls) in valid_trash_classes:
+                    cls_id = int(box.cls)
+                    if cls_id in valid_trash_classes:
                         ai_detected += 1
                         conf_total += float(box.conf) if hasattr(box, 'conf') else 0.8
+                        if cls_id == 39:
+                            class_counts['bottle'] += 1
+                        elif cls_id == 41:
+                            class_counts['cup'] += 1
         except Exception:
             app.logger.exception("AI画像判定に失敗しました。")
             try:
@@ -2246,26 +3044,36 @@ def trash_bin_deposit():
         # AI検出数を絶対的な獲得ポイントの基準とする（申告改ざん無効化）
         final_trash_count = ai_detected
         points_earned = final_trash_count * 5
+        trash_category = (request.form.get('trash_category') or 'ペットボトル・飲料容器').strip()[:100]
+        bag_size = (request.form.get('bag_size') or '手持ち・少量（1〜3個）').strip()[:100]
+        detected_classes_json = json.dumps(class_counts, ensure_ascii=False)
 
         conn = get_db()
         try:
             with conn:
                 activity_cursor = conn.execute('''
-                    INSERT INTO activity_history (user_id, type, title, trash_count, ai_detected_count, user_declared_count, points_earned) 
-                    VALUES (?, "trash_bin", ?, ?, ?, ?, ?)
-                ''', (user_id, bin_location, final_trash_count, ai_detected, user_declared, points_earned))
+                    INSERT INTO activity_history (
+                        user_id, type, title, trash_count, ai_detected_count,
+                        user_declared_count, points_earned, trash_category, bag_size
+                    )
+                    VALUES (?, "trash_bin", ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    user_id, bin_location, final_trash_count, ai_detected,
+                    user_declared, points_earned, trash_category, bag_size,
+                ))
                 activity_id = activity_cursor.lastrowid
                 
                 conn.execute('''
                     INSERT INTO ai_logs (
                         user_id, activity_id, detected_count, confidence,
                         image_path, image_sha256, is_flagged, flag_reason,
-                        result_status
+                        result_status, detected_classes_json
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'detected')
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'detected', ?)
                 ''', (
                     user_id, activity_id, ai_detected, avg_conf,
-                    image_path, image_sha256, is_flagged, flag_reason
+                    image_path, image_sha256, is_flagged, flag_reason,
+                    detected_classes_json,
                 ))
                 
                 conn.execute('UPDATE users SET total_points = total_points + ? WHERE id = ?', (points_earned, user_id))
@@ -2353,6 +3161,15 @@ def trash_bin_deposit():
 # ==========================================
 # 現場アクション：イベント参加領域（重複防止）
 # ==========================================
+EVENT_PARTICIPANT_ROLES = (
+    'ごみ回収・分別',
+    '重点エリア清掃',
+    '分別・袋管理サポート',
+    '課題記録・写真撮影',
+    '声かけ・安全見守り',
+)
+
+
 @app.route('/event/reserve/<int:event_id>', methods=['GET', 'POST'])
 @user_required
 def event_reserve(event_id):
@@ -2378,7 +3195,7 @@ def event_reserve(event_id):
             return 'イベントの予約は開催日の1年前から受け付けています。', 400
 
         reservation = conn.execute('''
-            SELECT status FROM event_reservations
+            SELECT status, participant_role FROM event_reservations
             WHERE user_id = ? AND event_id = ?
         ''', (user_id, event_id)).fetchone()
         completed = conn.execute('''
@@ -2386,6 +3203,11 @@ def event_reserve(event_id):
             WHERE user_id = ? AND event_id = ? AND type = 'event'
         ''', (user_id, event_id)).fetchone() is not None
         reserved = reservation is not None and reservation['status'] == 'reserved'
+        selected_role = (
+            reservation['participant_role']
+            if reservation is not None and reservation['participant_role']
+            else EVENT_PARTICIPANT_ROLES[0]
+        )
         completed = completed or (
             reservation is not None and reservation['status'] == 'completed'
         )
@@ -2420,6 +3242,9 @@ def event_reserve(event_id):
 
             if action != 'reserve':
                 return '不正な操作です。', 400
+            chosen_role = (request.form.get('participant_role') or EVENT_PARTICIPANT_ROLES[0]).strip()
+            if chosen_role not in EVENT_PARTICIPANT_ROLES:
+                chosen_role = EVENT_PARTICIPANT_ROLES[0]
             try:
                 # 予約数の確認と登録を同じ書き込みロック内で行い、定員超過を防ぐ。
                 conn.execute('BEGIN IMMEDIATE')
@@ -2471,16 +3296,17 @@ def event_reserve(event_id):
                         return '定員に達しています。', 409
                     if current_reservation is None:
                         conn.execute('''
-                            INSERT INTO event_reservations (user_id, event_id)
-                            VALUES (?, ?)
-                        ''', (user_id, event_id))
+                            INSERT INTO event_reservations (user_id, event_id, participant_role)
+                            VALUES (?, ?, ?)
+                        ''', (user_id, event_id, chosen_role))
                     else:
                         conn.execute('''
                             UPDATE event_reservations
-                            SET status = 'reserved', reserved_at = CURRENT_TIMESTAMP,
+                            SET status = 'reserved', participant_role = ?,
+                                reserved_at = CURRENT_TIMESTAMP,
                                 completed_at = NULL
                             WHERE user_id = ? AND event_id = ? AND status = 'cancelled'
-                        ''', (user_id, event_id))
+                        ''', (chosen_role, user_id, event_id))
                     conn.execute('''
                         INSERT INTO user_notifications (
                             user_id, event_id, notification_type, title, message
@@ -2490,7 +3316,8 @@ def event_reserve(event_id):
                         f'予約完了：{current_event["name"]}',
                         f'「{current_event["name"]}」を予約しました。\n'
                         f'開催日時：{current_event["datetime"]}\n'
-                        f'開催場所：{current_event["location"]}',
+                        f'開催場所：{current_event["location"]}\n'
+                        f'参加役割：{chosen_role}',
                     ))
                 conn.commit()
             except sqlite3.IntegrityError:
@@ -2508,6 +3335,8 @@ def event_reserve(event_id):
             'event_reserve.html', event=event,
             reserved=reserved, completed=completed,
             reserved_count=reserved_count,
+            participant_roles=EVENT_PARTICIPANT_ROLES,
+            selected_role=selected_role,
         )
     finally:
         conn.close()
@@ -2572,6 +3401,12 @@ def mark_notification_read(notification_id):
     conn = get_db()
     try:
         with conn:
+            notification = conn.execute('''
+                SELECT 1 FROM user_notifications
+                WHERE id = ? AND user_id = ?
+            ''', (notification_id, session['user_id'])).fetchone()
+            if notification is None:
+                return '通知が見つかりません。', 404
             conn.execute('''
                 UPDATE user_notifications SET read_at = CURRENT_TIMESTAMP
                 WHERE id = ? AND user_id = ? AND read_at IS NULL
@@ -2633,6 +3468,22 @@ def mark_all_notifications_read():
     finally:
         conn.close()
 
+def _render_event_live(event, started_at, error_msg=None, status=200, selected_role=None):
+    return render_template(
+        'event_live.html',
+        event=event,
+        started_at_epoch=started_at.timestamp() * 1000,
+        min_duration_minutes=EVENT_MIN_DURATION_SECONDS // 60,
+        location_radius_meters=EVENT_LOCATION_RADIUS_METERS,
+        location_check_required=(
+            event['latitude'] is not None and event['longitude'] is not None
+        ),
+        participant_roles=EVENT_PARTICIPANT_ROLES,
+        selected_role=selected_role or EVENT_PARTICIPANT_ROLES[0],
+        error_msg=error_msg,
+    ), status
+
+
 @app.route('/event/live/<int:event_id>')
 @user_required
 def event_live(event_id):
@@ -2643,7 +3494,7 @@ def event_live(event_id):
         if not event or event['status'] != 'open' or event['review_status'] != 'approved':
             return "エラー：参加可能なイベントが見つかりません。", 404
         reservation = conn.execute('''
-            SELECT status FROM event_reservations
+            SELECT status, participant_role FROM event_reservations
             WHERE user_id = ? AND event_id = ?
         ''', (user_id, event_id)).fetchone()
         if reservation is None or reservation['status'] == 'cancelled':
@@ -2670,15 +3521,8 @@ def event_live(event_id):
             started_at = now
             session[started_at_key] = started_at.isoformat()
 
-        return render_template(
-            'event_live.html',
-            event=event,
-            started_at_epoch=started_at.timestamp() * 1000,
-            min_duration_minutes=EVENT_MIN_DURATION_SECONDS // 60,
-            location_radius_meters=EVENT_LOCATION_RADIUS_METERS,
-            location_check_required=(
-                event['latitude'] is not None and event['longitude'] is not None
-            ),
+        return _render_event_live(
+            event, started_at, selected_role=reservation['participant_role']
         )
     except Exception:
         app.logger.exception("イベントライブ画面の表示エラー")
@@ -2780,7 +3624,7 @@ def event_complete(event_id):
             )
             return redirect(url_for('event_reserve', event_id=event_id))
         reservation = conn.execute('''
-            SELECT status FROM event_reservations
+            SELECT status, participant_role FROM event_reservations
             WHERE user_id = ? AND event_id = ?
         ''', (user_id, event_id)).fetchone()
         if reservation is None or reservation['status'] != 'reserved':
@@ -2790,8 +3634,13 @@ def event_complete(event_id):
         if elapsed_seconds < EVENT_MIN_DURATION_SECONDS:
             conn.close()
             minimum_minutes = EVENT_MIN_DURATION_SECONDS // 60
-            flash(f'イベント完了には最低{minimum_minutes}分間の活動計測が必要です。計測を続けてください。', 'error')
-            return redirect(url_for('event_live', event_id=event_id))
+            return _render_event_live(
+                event,
+                started_at,
+                error_msg=f'イベント完了には最低{minimum_minutes}分間の活動計測が必要です。計測を続けてください。',
+                status=400,
+                selected_role=reservation['participant_role'],
+            )
         verified_duration = min(int(elapsed_seconds), 86400)
         location_configured = (
             event['latitude'] is not None or event['longitude'] is not None
@@ -2825,21 +3674,33 @@ def event_complete(event_id):
             )
             if not within_event_radius:
                 conn.close()
-                flash(
-                    f'完了直前2分以内のイベント地点から{EVENT_LOCATION_RADIUS_METERS}m以内のGPS位置情報を確認できませんでした。'
-                    '開催地点でGPS計測を再開し、位置情報が更新されてから完了してください。',
-                    'error',
+                return _render_event_live(
+                    event,
+                    started_at,
+                    error_msg=(
+                        f'完了直前2分以内のイベント地点から{EVENT_LOCATION_RADIUS_METERS}m以内のGPS位置情報を確認できませんでした。'
+                        '開催地点でGPS計測を再開し、位置情報が更新されてから完了してください。'
+                    ),
+                    status=400,
+                    selected_role=reservation['participant_role'],
                 )
-                return redirect(url_for('event_live', event_id=event_id))
 
         bonus_points = event['bonus_points']
+        participant_role = (
+            request.form.get('participant_role')
+            or reservation['participant_role']
+            or EVENT_PARTICIPANT_ROLES[0]
+        ).strip()[:100]
+        before_state = (request.form.get('before_state') or '').strip()[:100]
+        after_state = (request.form.get('after_state') or '').strip()[:100]
         
         with conn:
             reservation_cursor = conn.execute('''
                 UPDATE event_reservations
-                SET status = 'completed', completed_at = CURRENT_TIMESTAMP
+                SET status = 'completed', completed_at = CURRENT_TIMESTAMP,
+                    participant_role = ?
                 WHERE user_id = ? AND event_id = ? AND status = 'reserved'
-            ''', (user_id, event_id))
+            ''', (participant_role, user_id, event_id))
             if reservation_cursor.rowcount != 1:
                 raise sqlite3.IntegrityError('イベント予約状態が変更されています。')
 
@@ -2847,9 +3708,10 @@ def event_complete(event_id):
                 INSERT INTO activity_history (
                     user_id, event_id, type, title,
                     duration, steps, distance, calories, gps_measured,
-                    step_source, detox_duration, points_earned
+                    step_source, detox_duration, points_earned,
+                    participant_role, before_state, after_state
                 )
-                VALUES (?, ?, 'event', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, 'event', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 user_id,
                 event_id,
@@ -2862,6 +3724,9 @@ def event_complete(event_id):
                 step_source,
                 detox_val,
                 bonus_points,
+                participant_role,
+                before_state,
+                after_state,
             ))
             
             conn.execute('UPDATE users SET total_points = total_points + ? WHERE id = ?', (bonus_points, user_id))
@@ -2969,6 +3834,10 @@ def event_survey(activity_id):
             time_fit = request.form.get('time_fit', '')
             next_participation = request.form.get('next_participation', '')
             comment = request.form.get('comment', '').strip()
+            noticed_issue = request.form.get('noticed_issue', '').strip()[:500]
+            suspected_cause = request.form.get('suspected_cause', '').strip()[:500]
+            collaboration_note = request.form.get('collaboration_note', '').strip()[:500]
+            next_improvement = request.form.get('next_improvement', '').strip()[:500]
             if satisfaction not in range(1, 6):
                 return '満足度を選択してください。', 400
             if time_fit not in {'short', 'just_right', 'long'}:
@@ -2983,11 +3852,15 @@ def event_survey(activity_id):
                     conn.execute('''
                         INSERT INTO event_feedback (
                             activity_id, user_id, event_id, satisfaction,
-                            time_fit, next_participation, comment
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                            time_fit, next_participation, comment,
+                            noticed_issue, suspected_cause,
+                            collaboration_note, next_improvement
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         activity_id, user_id, activity['event_id'],
                         satisfaction, time_fit, next_participation, comment,
+                        noticed_issue, suspected_cause,
+                        collaboration_note, next_improvement,
                     ))
             except sqlite3.IntegrityError:
                 flash('アンケートはすでに回答されています。', 'info')
@@ -3850,6 +4723,10 @@ def admin_bins():
 def _parse_trash_bin_form():
     name = request.form.get('name', '').strip()
     description = request.form.get('description', '').strip()
+    waste_types = (request.form.get('waste_types') or 'ペットボトル・カップ・容器').strip()[:100]
+    bin_status = (request.form.get('bin_status') or 'active').strip()
+    if bin_status not in ('active', 'full_reported', 'maintenance'):
+        bin_status = 'active'
     try:
         lat = float(request.form.get('lat', ''))
         lng = float(request.form.get('lng', ''))
@@ -3867,12 +4744,17 @@ def _parse_trash_bin_form():
         'description': description,
         'lat': lat,
         'lng': lng,
+        'waste_types': waste_types,
+        'bin_status': bin_status,
     }
 
 @app.route('/admin/bins/add', methods=['GET', 'POST'])
 @admin_required
 def add_bin():
-    bin_data = {'name': '', 'description': '', 'lat': '', 'lng': ''}
+    bin_data = {
+        'name': '', 'description': '', 'lat': '', 'lng': '',
+        'waste_types': 'ペットボトル・カップ・容器', 'bin_status': 'active',
+    }
     if request.method == 'POST':
         if not validate_csrf():
             return render_template(
@@ -3888,6 +4770,8 @@ def add_bin():
                     'description': request.form.get('description', ''),
                     'lat': request.form.get('lat', ''),
                     'lng': request.form.get('lng', ''),
+                    'waste_types': request.form.get('waste_types', 'ペットボトル・カップ・容器'),
+                    'bin_status': request.form.get('bin_status', 'active'),
                 }, error_msg=str(exc),
             ), 400
 
@@ -3895,11 +4779,12 @@ def add_bin():
         try:
             with conn:
                 conn.execute('''
-                    INSERT INTO trash_bins (name, description, lat, lng)
-                    VALUES (?, ?, ?, ?)
+                    INSERT INTO trash_bins (name, description, lat, lng, waste_types, bin_status)
+                    VALUES (?, ?, ?, ?, ?, ?)
                 ''', (
                     bin_data['name'], bin_data['description'],
                     bin_data['lat'], bin_data['lng'],
+                    bin_data['waste_types'], bin_data['bin_status'],
                 ))
         except sqlite3.IntegrityError:
             return render_template(
@@ -3939,6 +4824,8 @@ def edit_bin(bin_id):
                 'description': request.form.get('description', ''),
                 'lat': request.form.get('lat', ''),
                 'lng': request.form.get('lng', ''),
+                'waste_types': request.form.get('waste_types', 'ペットボトル・カップ・容器'),
+                'bin_status': request.form.get('bin_status', 'active'),
             })
             return render_template('edit_bin.html', bin=bin_data, error_msg=str(exc)), 400
 
@@ -3947,11 +4834,14 @@ def edit_bin(bin_id):
             with conn:
                 conn.execute('''
                     UPDATE trash_bins
-                    SET name = ?, description = ?, lat = ?, lng = ?
+                    SET name = ?, description = ?, lat = ?, lng = ?,
+                        waste_types = ?, bin_status = ?
                     WHERE id = ?
                 ''', (
                     updates['name'], updates['description'],
-                    updates['lat'], updates['lng'], bin_id,
+                    updates['lat'], updates['lng'],
+                    updates['waste_types'], updates['bin_status'],
+                    bin_id,
                 ))
         except sqlite3.IntegrityError:
             bin_data.update(updates)
@@ -4024,10 +4914,36 @@ def admin_events():
         missing_map_count=missing_map_count,
     )
 
+def _prefill_event_from_issue(event_values):
+    from_issue_id = request.args.get('from_issue', type=int)
+    if not from_issue_id:
+        return
+    conn = get_db()
+    try:
+        issue = conn.execute(
+            'SELECT * FROM issue_reports WHERE id = ?', (from_issue_id,)
+        ).fetchone()
+        if issue:
+            event_values.update({
+                'name': f"{issue['location']} 課題解決クリーンイベント",
+                'location': issue['location'],
+                'latitude': issue['latitude'] if issue['latitude'] is not None else '',
+                'longitude': issue['longitude'] if issue['longitude'] is not None else '',
+                'purpose_issue': (
+                    f"地域課題報告「{issue['title']}（{issue['trash_type']}）」への対応。"
+                    + (f" {issue['description']}" if issue['description'] else '')
+                )[:500],
+            })
+    finally:
+        conn.close()
+
+
 @app.route('/admin/events/add', methods=['GET', 'POST'])
 @admin_required
 def admin_event_add():
-    event_values = {'bonus_points': 50, 'category': 'auto'}
+    event_values = {'bonus_points': 50, 'category': 'auto', 'purpose_issue': ''}
+    if request.method == 'GET':
+        _prefill_event_from_issue(event_values)
     error_msg = None
     if request.method == 'POST':
         if not validate_csrf():
@@ -4041,13 +4957,13 @@ def admin_event_add():
                     event_cursor = conn.execute('''
                         INSERT INTO events (
                             name, location, latitude, longitude, datetime,
-                            bonus_points, category
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                            bonus_points, category, purpose_issue
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         event_values['name'], event_values['location'],
                         event_values['latitude'], event_values['longitude'],
                         event_values['datetime'], event_values['bonus_points'],
-                        event_values['category'],
+                        event_values['category'], event_values.get('purpose_issue', ''),
                     ))
                     _notify_all_users_of_new_event(conn, event_cursor.lastrowid)
                 return redirect(url_for('admin_events'))
@@ -4091,13 +5007,14 @@ def admin_event_edit(event_id):
                     conn.execute('''
                         UPDATE events
                         SET name = ?, location = ?, latitude = ?, longitude = ?,
-                            datetime = ?, bonus_points = ?, category = ?
+                            datetime = ?, bonus_points = ?, category = ?,
+                            purpose_issue = ?
                         WHERE id = ?
                     ''', (
                         event_values['name'], event_values['location'],
                         event_values['latitude'], event_values['longitude'],
                         event_values['datetime'], event_values['bonus_points'],
-                        event_values['category'],
+                        event_values['category'], event_values.get('purpose_issue', ''),
                         event_id,
                     ))
                 return redirect(url_for('admin_events'))
@@ -4339,6 +5256,7 @@ def _validated_event_form(require_reward_details=False):
     raw_latitude = request.form.get('latitude', '').strip()
     raw_longitude = request.form.get('longitude', '').strip()
     category_input = request.form.get('category', 'auto').strip()
+    purpose_issue = request.form.get('purpose_issue', '').strip()[:500]
     submitted_values = {
         'name': name,
         'location': location,
@@ -4349,6 +5267,7 @@ def _validated_event_form(require_reward_details=False):
         'capacity': raw_capacity,
         'reward_details': reward_details,
         'category': category_input,
+        'purpose_issue': purpose_issue,
     }
     if not name or len(name) > 100:
         submitted_values['name'] = ''
@@ -4430,6 +5349,7 @@ def _validated_event_form(require_reward_details=False):
         'capacity': capacity,
         'reward_details': reward_details,
         'category': category,
+        'purpose_issue': purpose_issue,
     }, None
 
 @app.route('/organizer/events')
@@ -4740,7 +5660,9 @@ def organizer_event_feedback_update(event_id, feedback_id):
 @organizer_required
 def organizer_event_new():
     error_msg = None
-    event_values = {'category': 'auto'}
+    event_values = {'category': 'auto', 'purpose_issue': ''}
+    if request.method == 'GET':
+        _prefill_event_from_issue(event_values)
     if request.method == 'POST':
         if not validate_csrf():
             return 'CSRFトークンが不正です。', 400
@@ -4762,8 +5684,8 @@ def organizer_event_new():
                         INSERT INTO events (
                             name, location, latitude, longitude, datetime,
                             bonus_points, capacity, reward_details, review_status,
-                            organizer_id, organization_id, category
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
+                            organizer_id, organization_id, category, purpose_issue
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)
                     ''', (
                         event_values['name'], event_values['location'],
                         event_values['latitude'], event_values['longitude'],
@@ -4772,6 +5694,7 @@ def organizer_event_new():
                         event_values['reward_details'],
                         session['user_id'], organization_id,
                         event_values['category'],
+                        event_values.get('purpose_issue', ''),
                     ))
                 return redirect(url_for('organizer_events'))
             finally:
@@ -4822,7 +5745,7 @@ def organizer_event_edit(event_id):
                         UPDATE events
                         SET name = ?, location = ?, latitude = ?, longitude = ?,
                             datetime = ?, bonus_points = ?, capacity = ?,
-                            reward_details = ?, category = ?,
+                            reward_details = ?, category = ?, purpose_issue = ?,
                             review_status = 'pending', review_comment = NULL,
                             reviewed_by = NULL, reviewed_at = NULL
                         WHERE id = ? AND organization_id = ? AND status = 'open'
@@ -4833,6 +5756,7 @@ def organizer_event_edit(event_id):
                         event_values['capacity'],
                         event_values['reward_details'],
                         event_values['category'],
+                        event_values.get('purpose_issue', ''),
                         event_id, organization_id,
                     ))
                 return redirect(url_for('organizer_events'))
@@ -5081,6 +6005,45 @@ def exchange_item():
         conn.close()
 
 
+def generate_qr():
+    public_url = "https://cleanstep.duckdns.org"
+
+    print("\n" + "=" * 60)
+    print("📱 PUBLIC URL")
+    print(public_url)
+    print("=" * 60)
+
+    qr = qrcode.QRCode(border=4)
+    qr.add_data(public_url)
+    qr.make(fit=True)
+
+    print("\nScan this QR code:\n")
+
+    esc = "\x1b["
+
+    for row in qr.get_matrix():
+        qr_line = "".join(
+            f"{esc}{40 if dark else 47}m "
+            for dark in row
+        )
+        print(qr_line + f"{esc}0m")
+
+    os.makedirs(app.static_folder, exist_ok=True)
+
+    qr_path = os.path.join(
+        app.static_folder,
+        "cleanstep_qr.png",
+    )
+
+    qr.make_image(
+        fill_color="black",
+        back_color="white",
+    ).save(qr_path)
+
+    print("\nQR image saved to:")
+    print(qr_path)
+
+
 # ==========================================
 # アプリケーション起動
 # ==========================================
@@ -5126,53 +6089,10 @@ if __name__ == '__main__':
         print(f"QRコード生成スキップ: {e}")
         print("QRコードを利用するには、アプリの仮想環境で `python -m pip install qrcode` を実行してください。")
 
+    print("Generating QR Code...")
+    threading.Thread(
+        target=generate_qr,
+        daemon=True,
+    ).start()
+
     app.run(host=host, debug=debug_mode, port=5005)
-
-def generate_qr():
-    public_url = "https://cleanstep.duckdns.org"
-
-    print("\n" + "=" * 60)
-    print("📱 PUBLIC URL")
-    print(public_url)
-    print("=" * 60)
-
-    qr = qrcode.QRCode(border=4)
-    qr.add_data(public_url)
-    qr.make(fit=True)
-
-    print("\nScan this QR code:\n")
-
-    esc = "\x1b["
-
-    for row in qr.get_matrix():
-        qr_line = "".join(
-            f"{esc}{40 if dark else 47}m "
-            for dark in row
-        )
-        print(qr_line + f"{esc}0m")
-
-    os.makedirs(app.static_folder, exist_ok=True)
-
-    qr_path = os.path.join(
-        app.static_folder,
-        "cleanstep_qr.png",
-    )
-
-    qr.make_image(
-        fill_color="black",
-        back_color="white",
-    ).save(qr_path)
-
-    print("\nQR image saved to:")
-    print(qr_path)
-
-# --------------------------------------------------
-# Place this at the very bottom of app.py
-# --------------------------------------------------
-
-print("Generating QR Code...")
-
-threading.Thread(
-    target=generate_qr,
-    daemon=True,
-).start()
