@@ -9,8 +9,6 @@ import secrets
 import math
 import calendar
 import re
-import subprocess
-import threading
 import qrcode
 import time
 from contextlib import closing
@@ -3876,9 +3874,12 @@ def event_survey(activity_id):
 @app.route('/admin/ai/image/<path:filename>')
 @admin_required
 def admin_ai_image(filename):
-    # UUID形式のファイル名だけを許可し、ログ内のパスをファイルシステム境界にしない。
     safe_name = os.path.basename(filename)
-    if safe_name != filename or not safe_name.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.webp')):
+    if safe_name != filename or not re.fullmatch(
+        r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(?:png|jpg|jpeg|gif|webp)',
+        safe_name,
+        re.IGNORECASE,
+    ):
         abort(404)
     return send_from_directory(UPLOAD_FOLDER, safe_name)
 
@@ -6005,45 +6006,6 @@ def exchange_item():
         conn.close()
 
 
-def generate_qr():
-    public_url = "https://cleanstep.duckdns.org"
-
-    print("\n" + "=" * 60)
-    print("📱 PUBLIC URL")
-    print(public_url)
-    print("=" * 60)
-
-    qr = qrcode.QRCode(border=4)
-    qr.add_data(public_url)
-    qr.make(fit=True)
-
-    print("\nScan this QR code:\n")
-
-    esc = "\x1b["
-
-    for row in qr.get_matrix():
-        qr_line = "".join(
-            f"{esc}{40 if dark else 47}m "
-            for dark in row
-        )
-        print(qr_line + f"{esc}0m")
-
-    os.makedirs(app.static_folder, exist_ok=True)
-
-    qr_path = os.path.join(
-        app.static_folder,
-        "cleanstep_qr.png",
-    )
-
-    qr.make_image(
-        fill_color="black",
-        back_color="white",
-    ).save(qr_path)
-
-    print("\nQR image saved to:")
-    print(qr_path)
-
-
 # ==========================================
 # アプリケーション起動
 # ==========================================
@@ -6052,7 +6014,7 @@ if __name__ == '__main__':
     debug_mode = os.environ.get("CLEANSTEP_DEBUG", "false").lower() == "true"
     # スマホからアクセスできるよう、デバッグ時も 0.0.0.0 で待ち受ける
     host = os.environ.get('CLEANSTEP_HOST', '0.0.0.0')
-    port = 5005
+    port = int(os.environ.get('PORT', '5005'))
 
     # PCのローカルIPを自動取得してターミナルにQRコードを表示
     import socket
@@ -6089,10 +6051,4 @@ if __name__ == '__main__':
         print(f"QRコード生成スキップ: {e}")
         print("QRコードを利用するには、アプリの仮想環境で `python -m pip install qrcode` を実行してください。")
 
-    print("Generating QR Code...")
-    threading.Thread(
-        target=generate_qr,
-        daemon=True,
-    ).start()
-
-    app.run(host=host, debug=debug_mode, port=5005)
+    app.run(host=host, debug=debug_mode, port=port)

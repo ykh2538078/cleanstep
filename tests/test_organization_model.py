@@ -1079,6 +1079,34 @@ class OrganizationModelTests(unittest.TestCase):
                         )
                     conn.execute('DELETE FROM trash_bins WHERE id = ?', (bin_id,))
 
+    def test_admin_ai_image_route_requires_generated_uuid_filename(self):
+        image_name = '12345678-1234-1234-1234-123456789abc.png'
+        with tempfile.TemporaryDirectory() as upload_dir:
+            image_path = Path(upload_dir) / image_name
+            image_path.write_bytes(b'validated image')
+            self._login_as(2, 'admin')
+            with patch.object(cleanstep, 'UPLOAD_FOLDER', upload_dir):
+                response = self.client.get(f'/admin/ai/image/{image_name}')
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.data, b'validated image')
+                response.close()
+                self.assertEqual(
+                    self.client.get('/admin/ai/image/not-a-uuid.png').status_code,
+                    404,
+                )
+                self.assertEqual(
+                    self.client.get(
+                        '/admin/ai/image/12345678-1234-1234-1234-123456789abc.txt'
+                    ).status_code,
+                    404,
+                )
+                self.assertEqual(
+                    self.client.get(
+                        '/admin/ai/image/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.png'
+                    ).status_code,
+                    404,
+                )
+
     def test_existing_user_and_admin_views_keep_working(self):
         csrf_token = self._csrf_token()
         response = self.client.post(
