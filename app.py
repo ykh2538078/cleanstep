@@ -10,6 +10,7 @@ import math
 import calendar
 import re
 import qrcode
+import sys
 import time
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
@@ -1132,9 +1133,9 @@ def init_db():
                 INSERT INTO events (name, location, datetime, bonus_points, category)
                 VALUES (?, ?, ?, ?, ?)
             ''', (
-                'みなとみらい清掃イベント', '横浜みなとみらい公園',
+                '山下公園清掃イベント', '山下公園',
                 '2026-10-10 10:00', 50,
-                suggest_event_category('みなとみらい清掃イベント', '横浜みなとみらい公園'),
+                suggest_event_category('山下公園清掃イベント', '山下公園'),
             ))
             conn.execute('''
                 INSERT INTO events (name, location, datetime, bonus_points, category)
@@ -1193,6 +1194,15 @@ def init_db():
             UPDATE events SET name = '湘南海岸ビーチ清掃イベント'
             WHERE name = '湘南海岸ビーチクリーン活動'
                 AND location = '江の島片瀬海岸'
+        ''')
+        conn.execute('''
+            UPDATE events
+            SET name = '山下公園清掃イベント', location = '山下公園'
+            WHERE name = 'みなとみらい清掃イベント'
+                AND location = '横浜みなとみらい公園'
+                AND datetime = '2026-10-10 10:00'
+                AND bonus_points = 50
+                AND organization_id IS NULL
         ''')
         conn.execute('''
             UPDATE events
@@ -6049,46 +6059,62 @@ def exchange_item():
 # ==========================================
 # アプリケーション起動
 # ==========================================
+def _print_startup_qr():
+    mobile_url = os.environ.get(
+        'CLEANSTEP_PUBLIC_URL',
+        'https://cleanstep.duckdns.org',
+    ).strip().rstrip('/')
+    if not mobile_url.startswith(('http://', 'https://')):
+        raise ValueError('CLEANSTEP_PUBLIC_URL must start with http:// or https://')
+
+    qr = qrcode.QRCode(border=4)
+    qr.add_data(mobile_url)
+    qr.make(fit=True)
+
+    try:
+        from colorama import just_fix_windows_console
+        just_fix_windows_console()
+    except ImportError:
+        pass
+
+    esc = '\x1b['
+    qr_lines = [
+        ''.join(f"{esc}{40 if dark else 47}m  " for dark in row) + f"{esc}0m"
+        for row in qr.get_matrix()
+    ]
+    print("\n" + "=" * 45)
+    print(f"📱 スマホ接続用URL: {mobile_url}")
+    print("（QRコードから公開URLへアクセスします）")
+    print("=" * 45)
+    print('\n'.join(qr_lines), flush=True)
+
+    qr_path = os.path.join(app.static_folder, 'phone_access_qr.png')
+    qr.make_image(fill_color='black', back_color='white').save(qr_path)
+    print(f"予備のQR画像: {qr_path}", flush=True)
+
+
+def _should_print_startup_qr():
+    if os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
+        return False
+    if __name__ == '__main__':
+        return True
+    return (
+        os.environ.get('FLASK_RUN_FROM_CLI') == 'true'
+        and 'run' in sys.argv[1:]
+    )
+
+
+if _should_print_startup_qr():
+    try:
+        _print_startup_qr()
+    except Exception as error:
+        print(f"QRコード生成エラー: {error}", file=sys.stderr, flush=True)
+
+
 if __name__ == '__main__':
     init_db()
     debug_mode = os.environ.get("CLEANSTEP_DEBUG", "false").lower() == "true"
     # スマホからアクセスできるよう、デバッグ時も 0.0.0.0 で待ち受ける
     host = os.environ.get('CLEANSTEP_HOST', '0.0.0.0')
     port = int(os.environ.get('PORT', '5005'))
-
-    # PCのローカルIPを自動取得してターミナルにQRコードを表示
-    import socket
-    try:
-        import qrcode
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-            s.connect(("8.8.8.8", 80))
-            local_ip = s.getsockname()[0]
-        mobile_url = f"http://{local_ip}:{port}"
-        print("\n" + "=" * 45)
-        print(f"📱 スマホ接続用URL: {mobile_url}")
-        print("（PCとスマホを同じWi-Fiに繋いで読み取ってください）")
-        print("=" * 45)
-        qr = qrcode.QRCode(border=4)
-        qr.add_data(mobile_url)
-        qr.make(fit=True)
-        # 端末の文字列ではなく、ANSI背景色でQRの白黒マスを描く。
-        # 1モジュールを2文字幅にして、一般的な端末フォントでも正方形に近づける。
-        try:
-            from colorama import just_fix_windows_console
-            just_fix_windows_console()
-        except ImportError:
-            pass
-        esc = '\x1b['
-        for row in qr.get_matrix():
-            line = ''.join(f"{esc}{40 if dark else 47}m  " for dark in row)
-            print(line + f"{esc}0m")
-
-        # 発表用にターミナル表示を主とし、画像ファイルも予備として残す。
-        qr_path = os.path.join(app.static_folder, 'phone_access_qr.png')
-        qr.make_image(fill_color='black', back_color='white').save(qr_path)
-        print(f"予備のQR画像: {qr_path}")
-    except Exception as e:
-        print(f"QRコード生成スキップ: {e}")
-        print("QRコードを利用するには、アプリの仮想環境で `python -m pip install qrcode` を実行してください。")
-
     app.run(host=host, debug=debug_mode, port=port)

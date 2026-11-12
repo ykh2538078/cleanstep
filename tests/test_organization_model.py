@@ -9,9 +9,10 @@ import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-from io import BytesIO
-from contextlib import contextmanager
+from io import BytesIO, StringIO
+from contextlib import contextmanager, redirect_stdout
 from pathlib import Path
+import sys
 from unittest.mock import patch
 
 from PIL import Image
@@ -3206,6 +3207,60 @@ class OrganizationModelTests(unittest.TestCase):
 
         self.assertEqual(result.exit_code, 0, result.output)
 
+    def test_startup_qr_uses_public_url_and_saves_image(self):
+        with tempfile.TemporaryDirectory() as app_root:
+            static_dir = Path(app_root) / 'static'
+            static_dir.mkdir()
+            output = StringIO()
+            with (
+                patch.dict(
+                    os.environ,
+                    {'CLEANSTEP_PUBLIC_URL': 'https://example.test/phone'},
+                ),
+                patch.object(cleanstep.app, 'root_path', app_root),
+                redirect_stdout(output),
+            ):
+                cleanstep._print_startup_qr()
+
+            self.assertIn('https://example.test/phone', output.getvalue())
+            self.assertTrue(
+                (Path(static_dir) / 'phone_access_qr.png').is_file()
+            )
+
+    def test_startup_qr_is_requested_for_flask_run_command_only(self):
+        with (
+            patch.dict(
+                os.environ,
+                {'FLASK_RUN_FROM_CLI': 'true'},
+                clear=False,
+            ),
+            patch.object(sys, 'argv', ['flask', '--app', 'app', 'run']),
+        ):
+            self.assertTrue(cleanstep._should_print_startup_qr())
+
+        with (
+            patch.dict(
+                os.environ,
+                {'FLASK_RUN_FROM_CLI': 'true'},
+                clear=False,
+            ),
+            patch.object(sys, 'argv', ['flask', '--app', 'app', 'routes']),
+        ):
+            self.assertFalse(cleanstep._should_print_startup_qr())
+
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    'FLASK_RUN_FROM_CLI': 'true',
+                    'WERKZEUG_RUN_MAIN': 'true',
+                },
+                clear=False,
+            ),
+            patch.object(sys, 'argv', ['flask', '--app', 'app', 'run']),
+        ):
+            self.assertFalse(cleanstep._should_print_startup_qr())
+
     def test_future_reserved_event_returns_to_reservation_page_without_completing(self):
         event_datetime = (
             datetime.now(cleanstep.JST) + timedelta(days=2)
@@ -3612,6 +3667,8 @@ class OrganizationModelTests(unittest.TestCase):
         self.assertIn('href="/events"', desktop_page)
         self.assertIn('href="/my/reservations"', desktop_page)
         self.assertIn('href="/issues/report"', desktop_page)
+        self.assertIn('class="user-app-notify"', desktop_page)
+        self.assertNotIn('通知を確認', desktop_page)
         self.assertNotIn('href="/trash-bin"', desktop_page)
 
         issue_report_desktop = self.client.get(

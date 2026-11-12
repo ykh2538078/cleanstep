@@ -192,12 +192,7 @@
 
         <!-- 👤 ログインユーザー情報 -->
         <div class="user-card">
-            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 15px;">
-                <h2 style="margin: 0;">こんにちは、<strong>{{ user['name'] }}</strong> さん</h2>
-                <a href="{{ url_for('user_notifications') }}" class="item-btn" style="background: {{ '#e67e22' if unread_notifications else '#eef7f1' }}; color: {{ '#fff' if unread_notifications else '#17633f' }};">
-                    🔔 通知を確認{% if unread_notifications %}（未読 {{ unread_notifications }} 件）{% endif %}
-                </a>
-            </div>
+            <h2>こんにちは、<strong>{{ user['name'] }}</strong> さん</h2>
             
             <div class="points-box">
                 <div class="point-card">
