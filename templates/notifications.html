@@ -37,6 +37,7 @@
                 </form>
             {% endif %}
         </div>
+        {% include "_user_page_back.html" %}
         {% for notification in notifications %}
             <article class="notification {{ 'unread' if not notification.is_read }}">
                 <form class="notification-open-form" method="POST" action="{{ url_for('open_notification', notification_id=notification.id) }}">

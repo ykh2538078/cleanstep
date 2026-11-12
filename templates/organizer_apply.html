@@ -21,6 +21,7 @@
     {% include "_user_navigation.html" %}
 <main>
     <h1>地域イベント主催者の申請</h1>
+    {% include "_user_page_back.html" %}
     <p>町内会・自治会・地域団体など、清掃イベントを主催する団体向けの申請です。承認後も管理できるのは自分が作成したイベントだけです。</p>
     {% if error_msg %}<p class="error">{{ error_msg }}</p>{% endif %}
     {% if application and application.status == 'approved' %}

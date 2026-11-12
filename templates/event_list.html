@@ -21,6 +21,7 @@
     {% include "_user_navigation.html" %}
     <main>
         <h1><a href="{{ url_for('home') }}" style="color:inherit; text-decoration:none;">{{ title }}</a></h1>
+        {% include "_user_page_back.html" %}
         {% for event in events %}
             <article>
                 <div>

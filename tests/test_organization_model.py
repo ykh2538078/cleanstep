@@ -146,6 +146,13 @@ def database_connection():
 
 
 class OrganizationModelTests(unittest.TestCase):
+    PC_USER_AGENT = (
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0'
+    )
+    MOBILE_USER_AGENT = (
+        'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Mobile'
+    )
+
     @classmethod
     def setUpClass(cls):
         cleanstep.app.config.update(TESTING=True)
@@ -157,6 +164,16 @@ class OrganizationModelTests(unittest.TestCase):
         self.client.get(path)
         with self.client.session_transaction() as user_session:
             return user_session['csrf_token']
+
+    def _use_mobile_user_agent(self, client=None):
+        (client or self.client).environ_base['HTTP_USER_AGENT'] = (
+            self.MOBILE_USER_AGENT
+        )
+
+    def _use_pc_user_agent(self, client=None):
+        (client or self.client).environ_base['HTTP_USER_AGENT'] = (
+            self.PC_USER_AGENT
+        )
 
     def test_user_report_aggregates_only_the_requested_user(self):
         conn = sqlite3.connect(":memory:")
@@ -658,6 +675,7 @@ class OrganizationModelTests(unittest.TestCase):
         log_id = None
         activity_id = None
         self._login_as(1)
+        self._use_mobile_user_agent()
         with tempfile.TemporaryDirectory() as upload_dir:
             try:
                 with patch.object(cleanstep, 'UPLOAD_FOLDER', upload_dir):
@@ -676,6 +694,7 @@ class OrganizationModelTests(unittest.TestCase):
                         )
                         self.assertEqual(response.status_code, 302)
                         self._login_as(3)
+                        self._use_mobile_user_agent()
                         response = self.client.post(
                             '/trash-bin/deposit',
                             data={
@@ -791,6 +810,7 @@ class OrganizationModelTests(unittest.TestCase):
 
         clients = [cleanstep.app.test_client(), cleanstep.app.test_client()]
         for client, user_id in zip(clients, (1, 3)):
+            self._use_mobile_user_agent(client)
             with client.session_transaction() as user_session:
                 user_session['user_id'] = user_id
                 user_session['role'] = 'user'
@@ -921,6 +941,7 @@ class OrganizationModelTests(unittest.TestCase):
         image_bytes = image.getvalue()
         image_sha256 = hashlib.sha256(image_bytes).hexdigest()
         self._login_as(1)
+        self._use_mobile_user_agent()
         with tempfile.TemporaryDirectory() as upload_dir:
             try:
                 with patch.object(cleanstep, 'UPLOAD_FOLDER', upload_dir):
@@ -996,6 +1017,7 @@ class OrganizationModelTests(unittest.TestCase):
             return image
 
         self._login_as(1)
+        self._use_mobile_user_agent()
         log_ids = []
         with tempfile.TemporaryDirectory() as upload_dir:
             try:
@@ -1121,7 +1143,7 @@ class OrganizationModelTests(unittest.TestCase):
         self.assertEqual(response.location, "/organizer")
         home_response = self.client.get("/home")
         self.assertEqual(home_response.status_code, 200)
-        self.assertIn("環境美化レポート".encode(), home_response.data)
+        self.assertIn("基本の活動記録".encode(), home_response.data)
         page = home_response.get_data(as_text=True)
         self.assertNotIn("実績・目標進捗", page)
         self.assertNotIn("最も近い目標", page)
@@ -2067,6 +2089,7 @@ class OrganizationModelTests(unittest.TestCase):
         membership_was_added = existing_membership is None
         try:
             self._login_as(1)
+            self._use_mobile_user_agent()
             response = self.client.get(f'/event/survey/{activity_id}')
             self.assertEqual(response.status_code, 200)
             self.assertIn('回答内容は主催団体に共有'.encode(), response.data)
@@ -2282,6 +2305,7 @@ class OrganizationModelTests(unittest.TestCase):
                     event_id,
                 ),
             )
+        self._use_mobile_user_agent()
         response = self.client.get(f"/event/live/{event_id}")
         self.assertEqual(response.status_code, 200)
         started_at = datetime.now(cleanstep.JST) - timedelta(seconds=901)
@@ -2506,6 +2530,7 @@ class OrganizationModelTests(unittest.TestCase):
             ).fetchone()["id"]
 
         self._login_as(1)
+        self._use_mobile_user_agent()
         response = self.client.get("/trash-bin")
         self.assertEqual(response.status_code, 200)
         self.assertIn(b'name="csrf_token"', response.get_data())
@@ -2589,6 +2614,7 @@ class OrganizationModelTests(unittest.TestCase):
         bin_id = registered_bin["id"]
 
         self._login_as(1)
+        self._use_mobile_user_agent()
         response = self.client.get(f"/trash-bin?bin_id={bin_id}")
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"marker=35.6585800,139.7454330", response.data)
@@ -2946,6 +2972,7 @@ class OrganizationModelTests(unittest.TestCase):
             ).fetchone()['total_points']
 
         self._login_as(1)
+        self._use_mobile_user_agent()
         try:
             live_response = self.client.get(f'/event/live/{event_id}')
             self.assertEqual(live_response.status_code, 200)
@@ -3050,6 +3077,7 @@ class OrganizationModelTests(unittest.TestCase):
             ''')
 
         self._login_as(1)
+        self._use_mobile_user_agent()
         response = self.client.get("/event/live/1")
         self.assertEqual(response.status_code, 200)
         with self.client.session_transaction() as user_session:
@@ -3130,7 +3158,9 @@ class OrganizationModelTests(unittest.TestCase):
             ''')
 
         self._login_as(1)
+        self._use_mobile_user_agent()
         self.client.get("/event/live/1")
+        self._use_mobile_user_agent()
         with self.client.session_transaction() as user_session:
             user_session["event_started_at_1"] = (
                 datetime.now(cleanstep.JST) - timedelta(minutes=20)
@@ -3199,19 +3229,14 @@ class OrganizationModelTests(unittest.TestCase):
             ).fetchone()['total_points']
 
         self._login_as(1)
+        self._use_mobile_user_agent()
         try:
             response = self.client.get(f"/event/live/{event_id}")
             self.assertEqual(response.status_code, 302)
-            self.assertEqual(
-                response.location, f"/event/reserve/{event_id}"
-            )
-
             response = self.client.get(response.location)
             page = response.get_data(as_text=True)
             self.assertEqual(response.status_code, 200)
             self.assertIn("イベント開催前のため、活動計測はまだ開始できません", page)
-            self.assertIn("開催日時になると", page)
-            self.assertNotIn(f"/event/live/{event_id}", page)
 
             with self.client.session_transaction() as user_session:
                 user_session[f"event_started_at_{event_id}"] = (
@@ -3226,12 +3251,10 @@ class OrganizationModelTests(unittest.TestCase):
                 },
             )
             self.assertEqual(response.status_code, 302)
-            self.assertEqual(
-                response.location, f"/event/reserve/{event_id}"
-            )
             response = self.client.get(response.location)
             self.assertIn("イベント開催前のため、活動は完了できません", response.get_data(as_text=True))
 
+            self._use_pc_user_agent()
             reservation_page = self.client.get("/my/reservations")
             self.assertIn("Future Reserved Test Event", reservation_page.get_data(as_text=True))
             self.assertIn("開催前・予約内容", reservation_page.get_data(as_text=True))
@@ -3277,6 +3300,7 @@ class OrganizationModelTests(unittest.TestCase):
             ''')
 
         self._login_as(1)
+        self._use_mobile_user_agent()
         self.client.get("/event/live/1")
         with self.client.session_transaction() as user_session:
             user_session["event_started_at_1"] = started_at.isoformat()
@@ -3532,7 +3556,7 @@ class OrganizationModelTests(unittest.TestCase):
         with self.client.session_transaction() as user_session:
             self.assertNotIn("user_id", user_session)
 
-    def test_view_mode_auto_detects_user_agent_and_manual_mode_can_be_reset(self):
+    def test_view_mode_always_follows_user_agent(self):
         self._login_as(1)
         mobile_user_agent = {
             'User-Agent': (
@@ -3547,10 +3571,21 @@ class OrganizationModelTests(unittest.TestCase):
 
         mobile_response = self.client.get('/home', headers=mobile_user_agent)
         self.assertEqual(mobile_response.status_code, 200)
-        self.assertIn(
-            'data-view-mode="mobile"',
-            mobile_response.get_data(as_text=True),
-        )
+        mobile_page = mobile_response.get_data(as_text=True)
+        self.assertIn('data-view-mode="mobile"', mobile_page)
+        self.assertNotIn('view-mode-switch', mobile_page)
+        self.assertNotIn('スマートフォン画面（現場アクション優先モード）', mobile_page)
+        self.assertIn('基本の活動記録', mobile_page)
+        self.assertIn('最近の活動履歴', mobile_page)
+        self.assertIn('href="/trash-bin"', mobile_page)
+        self.assertNotIn('href="/events"', mobile_page)
+        self.assertNotIn('href="/my/reservations"', mobile_page)
+        self.assertNotIn('おすすめイベント', mobile_page)
+
+        for pc_only_path in ('/events', '/my/reservations', '/event/reserve/1'):
+            response = self.client.get(pc_only_path, headers=mobile_user_agent)
+            self.assertEqual(response.status_code, 302)
+            self.assertEqual(response.location, '/home')
 
         fixed_pc_response = self.client.get(
             '/view-mode/pc?next=/home',
@@ -3559,50 +3594,96 @@ class OrganizationModelTests(unittest.TestCase):
         )
         self.assertEqual(fixed_pc_response.status_code, 200)
         self.assertIn(
-            'data-view-mode="pc"',
+            'data-view-mode="mobile"',
             fixed_pc_response.get_data(as_text=True),
         )
 
-        auto_response = self.client.get(
-            '/view-mode/auto?next=/home',
-            headers=mobile_user_agent,
-            follow_redirects=True,
-        )
-        self.assertEqual(auto_response.status_code, 200)
-        self.assertIn(
-            'data-view-mode="mobile"',
-            auto_response.get_data(as_text=True),
-        )
-        self.assertIn('自動', auto_response.get_data(as_text=True))
+        with self.client.session_transaction() as user_session:
+            user_session['view_mode'] = 'mobile'
 
         desktop_response = self.client.get('/home', headers=desktop_user_agent)
+        desktop_page = desktop_response.get_data(as_text=True)
         self.assertIn(
             'data-view-mode="pc"',
-            desktop_response.get_data(as_text=True),
+            desktop_page,
         )
+        self.assertNotIn('view-mode-switch', desktop_page)
+        self.assertIn('おすすめイベント', desktop_page)
+        self.assertIn('href="/events"', desktop_page)
+        self.assertIn('href="/my/reservations"', desktop_page)
+        self.assertIn('href="/issues/report"', desktop_page)
+        self.assertNotIn('href="/trash-bin"', desktop_page)
+
+        issue_report_desktop = self.client.get(
+            '/issues/report', headers=desktop_user_agent
+        )
+        self.assertEqual(issue_report_desktop.status_code, 200)
+
+        for mobile_only_path in ('/trash-bin', '/event/live/1'):
+            response = self.client.get(mobile_only_path, headers=desktop_user_agent)
+            self.assertEqual(response.status_code, 302)
+            self.assertEqual(response.location, '/home')
+
+    def test_user_navigation_and_internal_error_page_have_return_actions(self):
+        self._login_as(1)
+        home_response = self.client.get('/home')
+        self.assertEqual(home_response.status_code, 200)
+        home_page = home_response.get_data(as_text=True)
+        self.assertIn('class="user-page-back-row"', home_page)
+        self.assertIn('← 戻る', home_page)
+        self.assertIn(
+            '.user-page-back-row { margin: 12px 16px; text-align: left; }',
+            home_page,
+        )
+        self.assertLess(
+            home_page.index('class="hero-banner"'),
+            home_page.index('class="user-page-back-row"'),
+        )
+        self.assertLess(
+            home_page.index('class="user-page-back-row"'),
+            home_page.index('class="container"'),
+        )
+        app_bar = home_page.index('class="user-app-bar"')
+        app_bar_end = home_page.index('</div>', app_bar)
+        self.assertNotIn('user-page-back', home_page[app_bar:app_bar_end])
+
+        with cleanstep.app.test_request_context('/broken'):
+            error_page, status = cleanstep.handle_internal_server_error(
+                RuntimeError('simulated failure')
+            )
+        self.assertEqual(status, 500)
+        self.assertIn('前の画面に戻る', error_page)
+        self.assertIn('ホームへ', error_page)
 
     def test_mobile_pc_view_mode_and_issue_report_to_map_flow(self):
         self._login_as(1)
         try:
-            mobile_resp = self.client.get("/view-mode/mobile?next=/home", follow_redirects=True)
+            mobile_user_agent = {
+                'User-Agent': self.MOBILE_USER_AGENT
+            }
+            mobile_resp = self.client.get(
+                '/home', headers=mobile_user_agent
+            )
             self.assertEqual(mobile_resp.status_code, 200)
             mobile_page = mobile_resp.get_data(as_text=True)
             self.assertIn('data-view-mode="mobile"', mobile_page)
-            self.assertIn("スマートフォン画面（現場アクション優先モード）", mobile_page)
+            self.assertNotIn("スマートフォン画面（現場アクション優先モード）", mobile_page)
 
-            pc_resp = self.client.get("/view-mode/pc?next=/home", follow_redirects=True)
+            desktop_user_agent = {'User-Agent': self.PC_USER_AGENT}
+            pc_resp = self.client.get('/home', headers=desktop_user_agent)
             self.assertEqual(pc_resp.status_code, 200)
             pc_page = pc_resp.get_data(as_text=True)
             self.assertIn('data-view-mode="pc"', pc_page)
             self.assertIn("曜日別の活動傾向", pc_page)
-            self.assertIn("あなたの活動スタイルと発見実績", pc_page)
+            self.assertNotIn("あなたの活動スタイルと発見実績", pc_page)
 
-            report_get = self.client.get("/issues/report")
+            report_get = self.client.get("/issues/report", headers=mobile_user_agent)
             self.assertEqual(report_get.status_code, 200)
             self.assertIn("地域のゴミ・課題を報告", report_get.get_data(as_text=True))
 
             report_post = self.client.post(
                 "/issues/report",
+                headers=mobile_user_agent,
                 data={
                     "csrf_token": "test-csrf-token",
                     "title": "駅前ペットボトル散乱テスト",
@@ -3633,6 +3714,7 @@ class OrganizationModelTests(unittest.TestCase):
 
     def test_proposals_and_admin_issue_management_flow(self):
         self._login_as(1)
+        self._use_mobile_user_agent()
         try:
             prop_post = self.client.post(
                 "/proposals",
@@ -3708,6 +3790,7 @@ class OrganizationModelTests(unittest.TestCase):
 
     def test_part3_bin_management_and_issue_to_event_prefill(self):
         self._login_as(1)
+        self._use_mobile_user_agent()
         try:
             self.client.post(
                 "/issues/report",

@@ -37,6 +37,7 @@
         <h1>💡 地域改善提案・アクションプラン</h1>
         <p>課題報告と活動データをもとに、ごみ箱の増設や重点清掃など「地域の仕組み改善」を提案・共感するボード</p>
     </div>
+    {% include "_user_page_back.html" %}
     <div class="container">
         {% for category, message in get_flashed_messages(with_categories=true) %}
             <div class="flash-msg" role="status">{{ message }}</div>

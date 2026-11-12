@@ -79,8 +79,6 @@
         body[data-view-mode="mobile"] .container { max-width: 520px; }
         body[data-view-mode="mobile"] .right-col { display: none; }
 
-        .mode-banner { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; padding: 10px 16px; margin-bottom: 18px; border-radius: 10px; background: #eef7f1; border: 1px solid #ccebdd; color: #17633f; font-size: 13px; font-weight: 700; }
-        .mode-banner a { color: #257a52; text-decoration: underline; font-size: 12px; }
         .quick-action-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 14px; }
         .quick-action-card { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 16px 12px; background: #fff; border: 2px solid #dce5e1; border-radius: 14px; text-decoration: none; color: #2c3e50; font-weight: 700; font-size: 14px; box-shadow: 0 4px 12px rgba(0,0,0,.04); transition: transform .15s ease, border-color .15s ease; }
         .quick-action-card:hover { transform: translateY(-2px); border-color: #2ecc71; }
@@ -182,17 +180,9 @@
         <h1><a href="{{ url_for('home') }}" style="color:white; text-decoration:none;">CleanStep</a></h1>
         <p>{% if view_mode == 'mobile' %}📱 現場で見つける・参加する・記録する{% else %}💻 活動を振り返り、地域の次の改善を考える{% endif %}</p>
     </div>
+    {% include "_user_page_back.html" %}
 
     <div class="container">
-        <div class="mode-banner">
-            {% if view_mode == 'mobile' %}
-                <span>📱 スマートフォン画面（現場アクション優先モード）</span>
-                <a href="{{ url_for('switch_view_mode', mode='pc', next=request.full_path) }}">💻 PC分析画面（My Environment Report）に切り替える →</a>
-            {% else %}
-                <span>💻 PC画面（My Environment Report・地域分析モード）</span>
-                <a href="{{ url_for('switch_view_mode', mode='mobile', next=request.full_path) }}">📱 スマホ現場画面に切り替える →</a>
-            {% endif %}
-        </div>
         {% for category, message in get_flashed_messages(with_categories=true) %}
             <div class="flash-message flash-{{ category }}" role="status">
                 {{ message }}
@@ -225,11 +215,13 @@
             <div class="left-col">
                 <!-- 📸 メインの現場アクションボタン -->
                 <div class="action-area" style="margin-top: 0;">
+                    {% if view_mode == 'mobile' %}
                     <a href="{{ url_for('trash_bin') }}" class="btn-main">📸 エコごみ箱を開く（AI判定）</a>
                     <p style="font-size:12px; color:#7f8c8d; margin-top:12px; line-height:1.4; padding:0 20px;">
                         ※ 公平にポイントを付与するため、自己申告の個数ではなく、<br>
                         <strong>AIが写真から認識したごみの個数</strong>をもとにポイントが計算されます。
                     </p>
+                    {% endif %}
                     <div class="quick-action-grid">
                         <a href="{{ url_for('issue_report_new') }}" class="quick-action-card">
                             <span class="qa-icon">🚩</span>
@@ -245,6 +237,48 @@
                     <a href="{{ url_for('exchange_page') }}" class="item-btn exchange-btn">地元の特典を確認・交換</a>
                 </div>
 
+                <section class="report-section" aria-label="基本の活動記録">
+                    <div class="section-title" style="margin-top:0;">🌱 基本の活動記録</div>
+                    <div class="report-grid">
+                        <div class="report-card">
+                            <span>累計回収ごみ数</span>
+                            <strong>{{ my_report.my_total_trash }} 個</strong>
+                        </div>
+                        <div class="report-card">
+                            <span>イベント参加数</span>
+                            <strong>{{ my_report.my_event_count }} 回</strong>
+                        </div>
+                        <div class="report-card">
+                            <span>課題報告 / 改善提案</span>
+                            <strong>{{ my_report.my_issue_report_count }} / {{ my_report.my_proposal_count }} 件</strong>
+                        </div>
+                    </div>
+                    {% if my_report.contribution_badges %}
+                        <div class="category-list" style="margin-top:14px;">
+                            {% for badge in my_report.contribution_badges %}
+                                <span class="category-chip" title="{{ badge.desc }}">{{ badge.icon }} {{ badge.title }}</span>
+                            {% endfor %}
+                        </div>
+                    {% endif %}
+                    <div class="section-title" style="margin:22px 0 12px;">最近の活動履歴</div>
+                    <div class="list-wrapper">
+                        {% if not history %}
+                            <p class="event-empty">まだ活動履歴がありません。ゴミを拾って街を綺麗にしましょう！</p>
+                        {% else %}
+                            {% for h in history %}
+                                <div class="list-item">
+                                    <div style="text-align: left;">
+                                        <strong style="color: #2c3e50; font-size: 14px;">{{ h['title'] }}</strong><br>
+                                        <span style="color: #95a5a6; font-size: 11px;">{{ h['date']|jst_datetime }}</span>
+                                    </div>
+                                    <span style="color: #2ecc71; font-weight: bold; font-size: 16px;">+{{ h['points_earned'] }} pt</span>
+                                </div>
+                            {% endfor %}
+                        {% endif %}
+                    </div>
+                </section>
+
+                {% if view_mode == 'pc' %}
                 <div class="event-list-section" id="my-reserved-events">
                     <div class="section-title">📌 予約したイベント</div>
                     <div class="list-wrapper event-list">
@@ -308,8 +342,10 @@
                 </div>
                 <a class="item-btn event-list-link" href="{{ url_for('all_events') }}">イベント一覧を開く（全{{ event_count }}件）</a>
                 </div>
+                {% endif %}
             </div>
 
+            {% if view_mode == 'pc' %}
             <div class="right-col">
                 <section class="desktop-feedback" aria-label="活動フィードバック">
                     <div class="feedback-panel month-highlight">
@@ -348,38 +384,6 @@
                                 </div>
                             {% endfor %}
                         </div>
-                    </section>
-
-                    <section class="feedback-panel">
-                        <h2>🧭 あなたの活動スタイルと発見実績</h2>
-                        <p class="feedback-lead">日常のエコごみ箱・清掃イベント・地域課題の発見バランスです。</p>
-                        <div class="comparison-grid">
-                            <div class="comparison-card">
-                                <span>日常のごみ捨て</span>
-                                <strong>{{ my_report.my_trash_bin_action_count }} 回</strong>
-                                <small>累計 {{ my_report.my_total_trash }} 個（AI確認済 {{ my_report.verified_ai_count }} 件）</small>
-                            </div>
-                            <div class="comparison-card">
-                                <span>イベント参加</span>
-                                <strong>{{ my_report.my_event_count }} 回</strong>
-                                <small>地域と協力して清掃</small>
-                            </div>
-                            <div class="comparison-card">
-                                <span>地域課題の発見・提案</span>
-                                <strong>{{ my_report.my_issue_report_count }} 件</strong>
-                                <small>改善提案 {{ my_report.my_proposal_count }} 件 · <a href="{{ url_for('improvement_proposals_board') }}" style="color:#17633f;">提案ボード</a></small>
-                            </div>
-                        </div>
-                        {% if my_report.contribution_badges %}
-                            <div style="margin-top:14px; padding-top:12px; border-top:1px solid #edf2ef;">
-                                <span style="display:block; font-size:12px; font-weight:700; color:#17633f; margin-bottom:8px;">🏅 獲得した地域貢献バッジ・感謝ステータス</span>
-                                <div class="category-list">
-                                    {% for badge in my_report.contribution_badges %}
-                                        <span class="category-chip" title="{{ badge.desc }}">{{ badge.icon }} {{ badge.title }}</span>
-                                    {% endfor %}
-                                </div>
-                            </div>
-                        {% endif %}
                     </section>
 
                     <section class="feedback-panel">
@@ -479,42 +483,6 @@
                     </section>
                 </section>
 
-                <div class="report-section">
-                    <div class="section-title" style="margin-top:0;">🌱 環境美化レポート</div>
-                    <div class="report-grid">
-                        <div class="report-card">
-                            <span>累計回収ごみ数</span>
-                            <strong>{{ my_report.my_total_trash }} 個</strong>
-                        </div>
-                        <div class="report-card">
-                            <span>イベント参加数</span>
-                            <strong>{{ my_report.my_event_count }} 回</strong>
-                        </div>
-                    </div>
-                    {% if my_report.monthly_trends %}
-                        <div style="margin-top: 15px;">
-                            <span style="font-size: 12px; color: #475569; font-weight: bold;">📅 最近の月別活動記録</span>
-                            <table class="trend-table">
-                                <thead>
-                                    <tr><th>年月</th><th>回収数</th><th>参加数</th><th>獲得pt</th></tr>
-                                </thead>
-                                <tbody>
-                                    {% for m in my_report.monthly_trends %}
-                                        <tr>
-                                            <td>{{ m.month }}</td><td>{{ m.trash }} 個</td>
-                                            <td>{{ m.events }} 回</td><td>+{{ m.points }} pt</td>
-                                        </tr>
-                                    {% endfor %}
-                                </tbody>
-                            </table>
-                        </div>
-                    {% else %}
-                        <p style="font-size: 13px; color: #64748b; margin: 15px 0 0;">
-                            月別の活動記録はまだありません。
-                        </p>
-                    {% endif %}
-                </div>
-
                 <div class="section-title">🚩 地域の最新課題報告</div>
                 <div class="list-wrapper" style="margin-bottom: 25px;">
                     {% if recent_issues %}
@@ -533,23 +501,8 @@
                     {% endif %}
                 </div>
 
-                <div class="section-title">最近の活動履歴</div>
-                <div class="list-wrapper">
-                    {% if not history %}
-                        <p style="color: #95a5a6; padding: 15px; margin: 0; text-align: left; font-size: 14px;">まだ活動履歴がありません。ゴミを拾って街を綺麗にしましょう！</p>
-                    {% else %}
-                        {% for h in history %}
-                            <div class="list-item">
-                                <div style="text-align: left;">
-                                    <strong style="color: #2c3e50; font-size: 14px;">{{ h['title'] }}</strong><br>
-                                    <span style="color: #95a5a6; font-size: 11px;">{{ h['date']|jst_datetime }}</span>
-                                </div>
-                                <span style="color: #2ecc71; font-weight: bold; font-size: 16px;">+{{ h['points_earned'] }} pt</span>
-                            </div>
-                        {% endfor %}
-                    {% endif %}
-                </div>
             </div>
+            {% endif %}
         </div>
     </div>
 

@@ -2,11 +2,10 @@
     .user-app-bar { position: fixed; inset: 0 0 auto; z-index: 1000; display: flex; justify-content: space-between; align-items: flex-start; padding: 10px 12px; pointer-events: none; }
     .user-app-bar a, .user-menu-toggle { pointer-events: auto; }
     .user-app-left { display: flex; align-items: center; gap: 8px; pointer-events: auto; }
+    .user-page-back-row { margin: 12px 16px; text-align: left; }
+    .user-page-back { display: inline-flex; min-height: 38px; box-sizing: border-box; align-items: center; padding: 0 12px; border: 1px solid rgba(44,62,80,.2); border-radius: 8px; background: rgba(255,255,255,.92); color: #2c3e50; text-decoration: none; font-size: 13px; font-weight: 700; }
     .user-app-actions { display: flex; align-items: center; gap: 8px; pointer-events: auto; }
     .user-menu-toggle { width: 42px; height: 42px; border: 1px solid rgba(44,62,80,.2); border-radius: 8px; background: rgba(255,255,255,.92); color: #2c3e50; font-size: 23px; cursor: pointer; }
-    .view-mode-switch { display: inline-flex; min-height: 42px; align-items: center; gap: 4px; padding: 4px; border-radius: 10px; background: rgba(255,255,255,.95); border: 1px solid rgba(44,62,80,.15); box-shadow: 0 2px 6px rgba(0,0,0,.08); }
-    .view-mode-pill { display: inline-flex; align-items: center; padding: 6px 10px; border-radius: 7px; font-size: 12px; font-weight: 700; text-decoration: none; color: #566573; }
-    .view-mode-pill.active { background: #257a52; color: #fff; }
     .user-app-notify { display: inline-flex; min-height: 42px; box-sizing: border-box; align-items: center; gap: 6px; padding: 0 12px; border: 1px solid rgba(39,174,96,.3); border-radius: 8px; background: rgba(255,255,255,.95); color: #17633f; text-decoration: none; font-size: 13px; font-weight: 700; box-shadow: 0 2px 6px rgba(0,0,0,.08); }
     .user-app-notify-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; background: #e74c3c; color: #fff; font-size: 11px; font-weight: 700; }
     .user-app-logout { display: inline-flex; min-height: 42px; box-sizing: border-box; align-items: center; padding: 0 12px; border-radius: 8px; background: rgba(255,255,255,.92); color: #a32626; text-decoration: none; font-size: 13px; font-weight: 700; }
@@ -16,29 +15,19 @@
     .user-menu-panel nav a { padding: 12px; border-radius: 8px; background: #f3f8f5; color: #17633f; text-decoration: none; font-weight: 700; }
     .user-menu-backdrop { position: fixed; inset: 0; z-index: 1001; border: 0; background: rgba(15,23,42,.35); }
     .user-menu-backdrop[hidden] { display: none; }
-    .mobile-bottom-nav { position: fixed; inset: auto 0 0 0; z-index: 999; display: none; grid-template-columns: repeat(5, 1fr); background: #fff; border-top: 1px solid #dce5e1; box-shadow: 0 -4px 16px rgba(0,0,0,.07); padding: 6px 4px env(safe-area-inset-bottom, 6px); }
+    .mobile-bottom-nav { position: fixed; inset: auto 0 0 0; z-index: 999; display: none; grid-template-columns: repeat(4, 1fr); background: #fff; border-top: 1px solid #dce5e1; box-shadow: 0 -4px 16px rgba(0,0,0,.07); padding: 6px 4px env(safe-area-inset-bottom, 6px); }
     .mobile-bottom-nav a { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; padding: 6px 2px; color: #475569; text-decoration: none; font-size: 11px; font-weight: 700; border-radius: 8px; }
     .mobile-bottom-nav a:hover, .mobile-bottom-nav a.active { color: #17633f; background: #f0fdf4; }
     .mobile-bottom-nav .nav-icon { font-size: 18px; line-height: 1; }
     {% if view_mode == 'mobile' %}
     .mobile-bottom-nav { display: grid; }
     body { padding-bottom: 76px !important; }
-    {% else %}
-    @media (max-width: 768px) {
-        .mobile-bottom-nav { display: grid; }
-        body { padding-bottom: 76px !important; }
-    }
     {% endif %}
     @media (prefers-reduced-motion: reduce) { .user-menu-panel { transition: none; } }
 </style>
 <div class="user-app-bar">
     <div class="user-app-left">
         <button class="user-menu-toggle" type="button" aria-label="メニューを開く" aria-expanded="false" aria-controls="user-menu-panel">☰</button>
-        <div class="view-mode-switch" role="group" aria-label="画面表示モード切替">
-            <a class="view-mode-pill {{ 'active' if saved_view_mode == 'auto' }}" href="{{ url_for('switch_view_mode', mode='auto', next=request.full_path) }}">自動</a>
-            <a class="view-mode-pill {{ 'active' if view_mode == 'mobile' }}" href="{{ url_for('switch_view_mode', mode='mobile', next=request.full_path) }}">📱 スマホ版</a>
-            <a class="view-mode-pill {{ 'active' if view_mode == 'pc' }}" href="{{ url_for('switch_view_mode', mode='pc', next=request.full_path) }}">💻 PC版</a>
-        </div>
     </div>
     <div class="user-app-actions">
         <a class="user-app-notify" href="{{ url_for('user_notifications') }}" aria-label="通知一覧">
@@ -54,24 +43,41 @@
         <a href="{{ url_for('home') }}">🏠 ホーム</a>
         <a href="{{ url_for('regional_map') }}">🗺️ 地域マップ（ゴミ箱・課題・イベント）</a>
         <a href="{{ url_for('issue_report_new') }}">🚩 地域の課題を報告する</a>
-        <a href="{{ url_for('improvement_proposals_board') }}">💡 地域改善提案・アクションプラン</a>
+        {% if view_mode == 'mobile' %}
         <a href="{{ url_for('trash_bin') }}">📸 エコごみ箱・AI判定</a>
-        <a href="{{ url_for('all_events') }}">📅 イベント一覧</a>
-        <a href="{{ url_for('my_reservations') }}">📌 予約したイベント</a>
+        {% endif %}
+        <a href="{{ url_for('improvement_proposals_board') }}">💡 地域改善提案・アクションプラン</a>
+        {% if view_mode == 'pc' %}
+            <a href="{{ url_for('all_events') }}">📅 イベント一覧</a>
+            <a href="{{ url_for('my_reservations') }}">📌 予約したイベント</a>
+        {% endif %}
         <a href="{{ url_for('mypage') }}">📊 マイページ・カレンダー・実績</a>
         <a href="{{ url_for('exchange_page') }}">🎁 特典交換</a>
         <a href="{{ url_for('user_notifications') }}">🔔 通知{% if unread_notifications %}（未読{{ unread_notifications }}件）{% endif %}</a>
     </nav>
 </aside>
+{% if view_mode == 'mobile' %}
 <nav class="mobile-bottom-nav" aria-label="スマホ用クイックナビゲーション">
     <a href="{{ url_for('home') }}" class="{{ 'active' if request.endpoint == 'home' }}"><span class="nav-icon">🏠</span><span>ホーム</span></a>
     <a href="{{ url_for('regional_map') }}" class="{{ 'active' if request.endpoint == 'regional_map' }}"><span class="nav-icon">🗺️</span><span>地域マップ</span></a>
     <a href="{{ url_for('trash_bin') }}" class="{{ 'active' if request.endpoint == 'trash_bin' }}"><span class="nav-icon">📸</span><span>ごみ箱AI</span></a>
     <a href="{{ url_for('issue_report_new') }}" class="{{ 'active' if request.endpoint == 'issue_report_new' }}"><span class="nav-icon">🚩</span><span>課題報告</span></a>
-    <a href="{{ url_for('all_events') }}" class="{{ 'active' if request.endpoint in ('all_events', 'my_reservations') }}"><span class="nav-icon">📅</span><span>イベント</span></a>
 </nav>
+{% endif %}
 <script>
     (() => {
+        document.addEventListener('click', event => {
+            const link = event.target.closest('[data-history-back]');
+            if (!link || window.history.length < 2 || !document.referrer) return;
+            try {
+                if (new URL(document.referrer).origin === window.location.origin) {
+                    event.preventDefault();
+                    window.history.back();
+                }
+            } catch {
+                // Keep the home link as a safe fallback.
+            }
+        });
         const toggle = document.querySelector('.user-menu-toggle');
         const panel = document.getElementById('user-menu-panel');
         const backdrop = document.querySelector('.user-menu-backdrop');

@@ -32,6 +32,30 @@ except ImportError:
 
 app = Flask(__name__)
 
+
+def _internal_error_response():
+    return render_template(
+        'error.html',
+        title='内部サーバーエラー',
+        message='サーバーでエラーが発生しました。時間をおいて再度お試しください。',
+    ), 500
+
+
+@app.errorhandler(500)
+def handle_internal_server_error(error):
+    original_exception = getattr(error, 'original_exception', None)
+    if original_exception is not None:
+        app.logger.error(
+            "未処理の内部サーバーエラー",
+            exc_info=(
+                type(original_exception),
+                original_exception,
+                original_exception.__traceback__,
+            ),
+        )
+    return _internal_error_response()
+
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 APP_ENV = os.environ.get('CLEANSTEP_ENV', 'development').strip().lower()
 
@@ -1235,6 +1259,20 @@ def user_required(func):
         return func(*args, **kwargs)
     return wrapper
 
+
+def view_mode_required(mode):
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            if _detect_view_mode() != mode:
+                device_name = 'スマートフォン' if mode == 'mobile' else 'PC'
+                flash(f'この機能は{device_name}からご利用ください。', 'info')
+                return redirect(url_for('home'))
+            return func(*args, **kwargs)
+        return wrapper
+    return decorator
+
+
 def admin_required(func):
     @wraps(func)
     def wrapper(*args, **kwargs):
@@ -1421,12 +1459,6 @@ def event_started(value):
         return False
 
 def _detect_view_mode():
-    query_mode = (request.args.get('view') or '').strip().lower()
-    if query_mode in ('mobile', 'pc', 'auto'):
-        session['view_mode'] = query_mode
-    saved_mode = session.get('view_mode', 'auto')
-    if saved_mode in ('mobile', 'pc'):
-        return saved_mode
     ua = (request.headers.get('User-Agent') or '').lower()
     if any(token in ua for token in ('mobile', 'android', 'iphone', 'ipod', 'iemobile')):
         return 'mobile'
@@ -1435,8 +1467,6 @@ def _detect_view_mode():
 
 @app.route('/view-mode/<mode>')
 def switch_view_mode(mode):
-    if mode in ('mobile', 'pc', 'auto'):
-        session['view_mode'] = mode
     next_url = request.args.get('next') or request.referrer or url_for('home')
     if not next_url.startswith('/') or next_url.startswith('//'):
         next_url = url_for('home')
@@ -1463,7 +1493,6 @@ def inject_csrf_token():
         'csrf_token': session['csrf_token'],
         'unread_notifications': unread_notifications,
         'view_mode': effective_view,
-        'saved_view_mode': session.get('view_mode', 'auto'),
     }
 
 
@@ -2075,7 +2104,7 @@ def home():
         )
     except Exception:
         app.logger.exception("マイページ表示エラー")
-        return "内部エラーが発生しました。時間をおいて再度お試しください。"
+        return _internal_error_response()
 
 
 @app.route('/guide')
@@ -2169,6 +2198,7 @@ def mypage():
 
 @app.route('/events')
 @user_required
+@view_mode_required('pc')
 def all_events():
     conn = get_db()
     try:
@@ -2207,6 +2237,7 @@ def all_events():
 
 @app.route('/my/reservations')
 @user_required
+@view_mode_required('pc')
 def my_reservations():
     conn = get_db()
     try:
@@ -2760,6 +2791,7 @@ def admin_proposal_status_update(proposal_id):
 # ==========================================
 @app.route('/trash-bin')
 @user_required
+@view_mode_required('mobile')
 def trash_bin():
     conn = get_db()
     try:
@@ -2832,6 +2864,7 @@ def _record_duplicate_image_attempt(user_id, original_log_id, image_sha256):
 
 @app.route('/trash-bin/deposit', methods=['POST'])
 @user_required
+@view_mode_required('mobile')
 def trash_bin_deposit():
     user_id = session['user_id']
     if not validate_csrf():
@@ -3170,6 +3203,7 @@ EVENT_PARTICIPANT_ROLES = (
 
 @app.route('/event/reserve/<int:event_id>', methods=['GET', 'POST'])
 @user_required
+@view_mode_required('pc')
 def event_reserve(event_id):
     user_id = session['user_id']
     conn = get_db()
@@ -3342,6 +3376,7 @@ def event_reserve(event_id):
 
 @app.route('/event/reservation/<int:event_id>/complete')
 @user_required
+@view_mode_required('pc')
 def event_reservation_complete(event_id):
     user_id = session['user_id']
     conn = get_db()
@@ -3484,6 +3519,7 @@ def _render_event_live(event, started_at, error_msg=None, status=200, selected_r
 
 @app.route('/event/live/<int:event_id>')
 @user_required
+@view_mode_required('mobile')
 def event_live(event_id):
     user_id = session['user_id']
     conn = get_db()
@@ -3496,7 +3532,8 @@ def event_live(event_id):
             WHERE user_id = ? AND event_id = ?
         ''', (user_id, event_id)).fetchone()
         if reservation is None or reservation['status'] == 'cancelled':
-            return redirect(url_for('event_reserve', event_id=event_id))
+            flash('イベントの予約はPCから行ってください。', 'info')
+            return redirect(url_for('home'))
         if reservation['status'] == 'completed':
             return redirect(url_for('home'))
         
@@ -3506,7 +3543,7 @@ def event_live(event_id):
                 'イベント開催前のため、活動計測はまだ開始できません。開催日時をご確認ください。',
                 'info',
             )
-            return redirect(url_for('event_reserve', event_id=event_id))
+            return redirect(url_for('home'))
         
         # ★ここから修正：古いセッション時刻（12時間以上前など）は破棄して再計測にする
         started_at_key = f'event_started_at_{event_id}'
@@ -3524,12 +3561,13 @@ def event_live(event_id):
         )
     except Exception:
         app.logger.exception("イベントライブ画面の表示エラー")
-        return "内部エラーが発生しました。時間をおいて再度お試しください。"
+        return _internal_error_response()
     finally:
         conn.close()
 
 @app.route('/event/complete/<int:event_id>', methods=['POST'])
 @user_required
+@view_mode_required('mobile')
 def event_complete(event_id):
     user_id = session['user_id']
     if not validate_csrf():
@@ -3620,7 +3658,7 @@ def event_complete(event_id):
                 'イベント開催前のため、活動は完了できません。開催日時をご確認ください。',
                 'info',
             )
-            return redirect(url_for('event_reserve', event_id=event_id))
+            return redirect(url_for('home'))
         reservation = conn.execute('''
             SELECT status, participant_role FROM event_reservations
             WHERE user_id = ? AND event_id = ?
@@ -3745,13 +3783,14 @@ def event_complete(event_id):
         return redirect(url_for('event_result', activity_id=activity_id))
     except Exception:
         app.logger.exception("イベント完了処理中に内部エラーが発生しました。")
-        return "内部エラーが発生しました。時間をおいて再度お試しください。", 500
+        return _internal_error_response()
     finally:
         if conn is not None:
             conn.close()
 
 @app.route('/event/result/<int:activity_id>')
 @user_required
+@view_mode_required('mobile')
 def event_result(activity_id):
     conn = get_db()
     try:
@@ -3801,6 +3840,7 @@ def event_result(activity_id):
 
 @app.route('/event/survey/<int:activity_id>', methods=['GET', 'POST'])
 @user_required
+@view_mode_required('mobile')
 def event_survey(activity_id):
     user_id = session['user_id']
     conn = get_db()
@@ -6001,7 +6041,7 @@ def exchange_item():
         return "競合が発生したため交換を取り消しました。しばらくしてから再度お試しください。", 409
     except Exception:
         app.logger.exception("特典交換中にエラーが発生しました。")
-        return "内部エラーが発生しました。"
+        return _internal_error_response()
     finally:
         conn.close()
 
