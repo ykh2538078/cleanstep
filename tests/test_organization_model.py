@@ -3532,6 +3532,55 @@ class OrganizationModelTests(unittest.TestCase):
         with self.client.session_transaction() as user_session:
             self.assertNotIn("user_id", user_session)
 
+    def test_view_mode_auto_detects_user_agent_and_manual_mode_can_be_reset(self):
+        self._login_as(1)
+        mobile_user_agent = {
+            'User-Agent': (
+                'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Mobile'
+            )
+        }
+        desktop_user_agent = {
+            'User-Agent': (
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0'
+            )
+        }
+
+        mobile_response = self.client.get('/home', headers=mobile_user_agent)
+        self.assertEqual(mobile_response.status_code, 200)
+        self.assertIn(
+            'data-view-mode="mobile"',
+            mobile_response.get_data(as_text=True),
+        )
+
+        fixed_pc_response = self.client.get(
+            '/view-mode/pc?next=/home',
+            headers=mobile_user_agent,
+            follow_redirects=True,
+        )
+        self.assertEqual(fixed_pc_response.status_code, 200)
+        self.assertIn(
+            'data-view-mode="pc"',
+            fixed_pc_response.get_data(as_text=True),
+        )
+
+        auto_response = self.client.get(
+            '/view-mode/auto?next=/home',
+            headers=mobile_user_agent,
+            follow_redirects=True,
+        )
+        self.assertEqual(auto_response.status_code, 200)
+        self.assertIn(
+            'data-view-mode="mobile"',
+            auto_response.get_data(as_text=True),
+        )
+        self.assertIn('自動', auto_response.get_data(as_text=True))
+
+        desktop_response = self.client.get('/home', headers=desktop_user_agent)
+        self.assertIn(
+            'data-view-mode="pc"',
+            desktop_response.get_data(as_text=True),
+        )
+
     def test_mobile_pc_view_mode_and_issue_report_to_map_flow(self):
         self._login_as(1)
         try:

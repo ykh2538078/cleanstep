@@ -35,6 +35,7 @@
     <div class="user-app-left">
         <button class="user-menu-toggle" type="button" aria-label="メニューを開く" aria-expanded="false" aria-controls="user-menu-panel">☰</button>
         <div class="view-mode-switch" role="group" aria-label="画面表示モード切替">
+            <a class="view-mode-pill {{ 'active' if saved_view_mode == 'auto' }}" href="{{ url_for('switch_view_mode', mode='auto', next=request.full_path) }}">自動</a>
             <a class="view-mode-pill {{ 'active' if view_mode == 'mobile' }}" href="{{ url_for('switch_view_mode', mode='mobile', next=request.full_path) }}">📱 スマホ版</a>
             <a class="view-mode-pill {{ 'active' if view_mode == 'pc' }}" href="{{ url_for('switch_view_mode', mode='pc', next=request.full_path) }}">💻 PC版</a>
         </div>
