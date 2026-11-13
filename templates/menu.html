@@ -180,7 +180,6 @@
         <h1><a href="{{ url_for('home') }}" style="color:white; text-decoration:none;">CleanStep</a></h1>
         <p>{% if view_mode == 'mobile' %}📱 現場で見つける・参加する・記録する{% else %}💻 活動を振り返り、地域の次の改善を考える{% endif %}</p>
     </div>
-    {% include "_user_page_back.html" %}
 
     <div class="container">
         {% for category, message in get_flashed_messages(with_categories=true) %}
@@ -203,6 +202,10 @@
                     <span>本日の獲得</span>
                     <strong>{{ user['today_points'] }} pt</strong>
                 </div>
+                <div class="point-card">
+                    <span>確認待ち（仮）</span>
+                    <strong>{{ my_report.pending_point_total }} pt</strong>
+                </div>
             </div>
         </div>
 
@@ -213,8 +216,8 @@
                     {% if view_mode == 'mobile' %}
                     <a href="{{ url_for('trash_bin') }}" class="btn-main">📸 エコごみ箱を開く（AI判定）</a>
                     <p style="font-size:12px; color:#7f8c8d; margin-top:12px; line-height:1.4; padding:0 20px;">
-                        ※ 公平にポイントを付与するため、自己申告の個数ではなく、<br>
-                        <strong>AIが写真から認識したごみの個数</strong>をもとにポイントが計算されます。
+                        ※ ポイントは自己申告やAI推定だけでは確定せず、<br>
+                        <strong>管理者の二重確認・裁定後の件数</strong>をもとに確定します。
                     </p>
                     {% endif %}
                     <div class="quick-action-grid">
@@ -266,14 +269,19 @@
                                         <strong style="color: #2c3e50; font-size: 14px;">{{ h['title'] }}</strong><br>
                                         <span style="color: #95a5a6; font-size: 11px;">{{ h['date']|jst_datetime }}</span>
                                     </div>
-                                    <span style="color: #2ecc71; font-weight: bold; font-size: 16px;">+{{ h['points_earned'] }} pt</span>
+                                    {% if h['points_status'] == 'pending' %}
+                                        <strong style="color: #9a6700; font-size: 14px;">確認待ち {{ h['points_pending'] }} pt（仮）</strong>
+                                    {% elif h['points_status'] == 'cancelled' %}
+                                        <strong style="color: #64748b; font-size: 14px;">確定ポイントなし</strong>
+                                    {% else %}
+                                        <strong style="color: #2ecc71; font-size: 16px;">+{{ h['points_earned'] }} pt</strong>
+                                    {% endif %}
                                 </div>
                             {% endfor %}
                         {% endif %}
                     </div>
                 </section>
 
-                {% if view_mode == 'pc' %}
                 <div class="event-list-section" id="my-reserved-events">
                     <div class="section-title">📌 予約したイベント</div>
                     <div class="list-wrapper event-list">
@@ -337,7 +345,6 @@
                 </div>
                 <a class="item-btn event-list-link" href="{{ url_for('all_events') }}">イベント一覧を開く（全{{ event_count }}件）</a>
                 </div>
-                {% endif %}
             </div>
 
             {% if view_mode == 'pc' %}

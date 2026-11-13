@@ -14,6 +14,9 @@
         .meta { color: #596a63; font-size: .9rem; }
         .action { flex: 0 0 auto; padding: 10px 14px; border-radius: 7px; background: #257a52; color: #fff; text-decoration: none; font-weight: 700; }
         .empty { padding: 24px; background: #fff; border-radius: 10px; color: #596a63; }
+        .event-search { display: flex; gap: 8px; margin: 0 0 18px; }
+        .event-search input { min-width: 0; flex: 1; padding: 12px; border: 1px solid #cbd5d1; border-radius: 8px; font: inherit; }
+        .event-search button { padding: 0 16px; border: 0; border-radius: 8px; background: #257a52; color: #fff; font: inherit; font-weight: 700; }
         @media (max-width: 560px) { article { align-items: stretch; flex-direction: column; } .action { text-align: center; } }
     </style>
 </head>
@@ -22,6 +25,12 @@
     <main>
         <h1><a href="{{ url_for('home') }}" style="color:inherit; text-decoration:none;">{{ title }}</a></h1>
         {% include "_user_page_back.html" %}
+        {% if not is_reservation_list %}
+            <form class="event-search" action="{{ url_for('all_events') }}" method="get" role="search">
+                <input type="search" name="q" value="{{ search_query or '' }}" maxlength="100" placeholder="イベント名・場所・種類で検索" aria-label="イベント名・場所・種類で検索">
+                <button type="submit">検索</button>
+            </form>
+        {% endif %}
         {% for event in events %}
             <article>
                 <div>
@@ -45,7 +54,7 @@
                 {% endif %}
             </article>
         {% else %}
-            <p class="empty">{% if is_reservation_list %}予約中のイベントはありません。{% else %}1年以内に開催予定のイベントはありません。{% endif %}</p>
+            <p class="empty">{% if is_reservation_list %}予約中のイベントはありません。{% elif search_query %}「{{ search_query }}」に一致するイベントはありません。{% else %}1年以内に開催予定のイベントはありません。{% endif %}</p>
         {% endfor %}
     </main>
 </body>

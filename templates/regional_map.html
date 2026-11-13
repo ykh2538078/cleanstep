@@ -27,6 +27,8 @@
         .map-item:last-child { border-bottom: 0; }
         .map-item-title { font-weight: 700; font-size: 14px; color: #2c3e50; display: block; }
         .map-item-meta { font-size: 12px; color: #64748b; display: block; margin-top: 4px; line-height: 1.5; }
+        .map-item.focused { margin: 0 -8px; padding: 12px 8px; border-radius: 8px; background: #fff7ed; outline: 2px solid #fb923c; }
+        .issue-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 9px; }
         .badge { display: inline-block; padding: 3px 8px; border-radius: 12px; font-size: 11px; font-weight: 700; }
         .badge-bin { background: #e0f2fe; color: #0369a1; }
         .badge-issue { background: #fef3c7; color: #92400e; }
@@ -34,6 +36,7 @@
         .badge-event { background: #dcfce7; color: #15803d; }
         .action-link { flex-shrink: 0; padding: 7px 12px; border-radius: 16px; background: #2ecc71; color: #fff; text-decoration: none; font-size: 12px; font-weight: 700; }
         .empty { color: #64748b; font-size: 13px; margin: 0; }
+        .focus-notice { margin: 0 0 14px; padding: 12px 14px; border: 1px solid #fdba74; border-radius: 9px; background: #fff7ed; color: #9a3412; font-weight: 700; }
     </style>
 </head>
 <body data-view-mode="{{ view_mode }}">
@@ -45,6 +48,9 @@
     {% include "_user_page_back.html" %}
 
     <main class="container">
+        {% if focus_issue_id and issues|selectattr('id', 'equalto', focus_issue_id)|list %}
+            <p class="focus-notice" role="status">報告した課題を地図と一覧で表示しています。ここから同じ場所の清掃イベントや改善提案を確認できます。</p>
+        {% endif %}
         <div class="toolbar">
             <div class="filter-tabs" role="group" aria-label="マップ表示フィルタ">
                 <button type="button" class="filter-btn active" data-layer="all">すべて表示</button>
@@ -102,7 +108,7 @@
             <section class="panel" data-panel="issues">
                 <h2>🚩 地域の課題報告（{{ issues|length }}件）</h2>
                 {% for issue in issues %}
-                    <div class="map-item">
+                    <div class="map-item{% if issue.focused %} focused{% endif %}" id="issue-{{ issue.id }}">
                         <div>
                             <span class="map-item-title">{{ issue.title }}</span>
                             <span class="badge {{ 'badge-issue-high' if issue.severity == 'high' else 'badge-issue' }}">
@@ -113,8 +119,29 @@
                                 {% if issue.ai_detected_count is not none %} | 🤖 AI推定 {{ issue.ai_detected_count }}個{% endif %}
                                 {% if issue.description %}<br>{{ issue.description }}{% endif %}
                             </span>
+                            <div class="issue-actions">
+                                <a class="action-link" href="{{ issue.proposal_url }}">💡 この課題から改善提案</a>
+                                {% if is_organizer %}
+                                    <a class="action-link" href="{{ url_for('organizer_event_new', from_issue=issue.id) }}">🧹 清掃イベントを企画</a>
+                                {% endif %}
+                            </div>
+                            {% if issue.related_events %}
+                                <span class="map-item-meta"><strong>同じ場所の募集中イベント</strong></span>
+                                {% for event in issue.related_events %}
+                                    <span class="map-item-meta">
+                                        {{ event.name }} · {{ event.datetime }}
+                                        <a href="{{ url_for('event_reserve', event_id=event.id) }}">詳細・予約</a>
+                                    </span>
+                                {% endfor %}
+                            {% endif %}
                         </div>
-                        <span class="badge badge-issue">{{ '対応済み' if issue.status == 'resolved' else ('対応検討中' if issue.status == 'in_progress' else '未対応') }}</span>
+                        <div>
+                            <span class="badge badge-issue">{{ '対応済み' if issue.status == 'resolved' else ('対応検討中' if issue.status == 'in_progress' else '未対応') }}</span>
+                            <span class="badge badge-issue">
+                                {% set environment_labels = {'unverified': '環境変化：未確認', 'improved': '環境改善を確認', 'unchanged': '環境変化なし', 'worsened': '環境悪化', 'recurred': '再発を確認'} %}
+                                {{ environment_labels.get(issue.environment_status, '環境変化：未確認') }}
+                            </span>
+                        </div>
                     </div>
                 {% else %}
                     <p class="empty">まだ課題報告はありません。「新しい地域課題を報告する」から投稿できます。</p>
@@ -162,6 +189,7 @@
                 events: L.layerGroup().addTo(map),
             };
             const bounds = [];
+            const issueMarkers = new Map();
 
             bins.forEach(bin => {
                 if (typeof bin.lat === 'number' && typeof bin.lng === 'number') {
@@ -177,8 +205,19 @@
                 if (typeof issue.latitude === 'number' && typeof issue.longitude === 'number') {
                     const marker = L.circleMarker([issue.latitude, issue.longitude], {
                         radius: 10, color: '#c2410c', fillColor: '#fb923c', fillOpacity: 0.9
-                    }).bindPopup(`<strong>🚩 ${issue.title}</strong><br>${issue.location}（${issue.trash_type}）`);
+                    });
+                    const popup = document.createElement('div');
+                    const title = document.createElement('strong');
+                    title.textContent = `🚩 ${issue.title}`;
+                    const details = document.createElement('div');
+                    details.textContent = `${issue.location}（${issue.trash_type}）`;
+                    const proposalLink = document.createElement('a');
+                    proposalLink.href = issue.proposal_url;
+                    proposalLink.textContent = 'この課題から改善提案';
+                    popup.append(title, details, proposalLink);
+                    marker.bindPopup(popup);
                     layers.issues.addLayer(marker);
+                    issueMarkers.set(issue.id, marker);
                     bounds.push([issue.latitude, issue.longitude]);
                 }
             });
@@ -195,6 +234,18 @@
 
             if (bounds.length > 0) {
                 map.fitBounds(bounds, { padding: [30, 30], maxZoom: 15 });
+            }
+            const focusedIssue = issues.find(issue => issue.id === {{ focus_issue_id|tojson }});
+            if (focusedIssue) {
+                if (typeof focusedIssue.latitude === 'number'
+                    && typeof focusedIssue.longitude === 'number') {
+                    map.setView([focusedIssue.latitude, focusedIssue.longitude], 16);
+                    issueMarkers.get(focusedIssue.id)?.openPopup();
+                }
+                document.getElementById(`issue-${focusedIssue.id}`)?.scrollIntoView({
+                    behavior: 'smooth',
+                    block: 'center',
+                });
             }
 
             document.querySelectorAll('.filter-btn').forEach(btn => {

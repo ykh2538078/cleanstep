@@ -8,10 +8,14 @@
     <title>新規ユーザー登録 - CleanStep</title>
     <style>
         body { font-family: Arial, sans-serif; margin: 0; padding: 50px 20px; background-color: #f4f7f6; text-align: center; }
-        .container { width: 100%; max-width: 400px; box-sizing: border-box; margin: auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        .container { width: 100%; max-width: 520px; box-sizing: border-box; margin: auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
         .form-group { margin-bottom: 15px; text-align: left; }
         label { display: block; margin-bottom: 5px; font-weight: bold; }
-        input[type="text"], input[type="email"], input[type="password"] { width: 100%; padding: 8px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; font-size: 16px; }
+        input[type="text"], input[type="email"], input[type="password"], select, textarea { width: 100%; padding: 8px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; font-size: 16px; }
+        textarea { min-height: 100px; resize: vertical; font-family: inherit; }
+        .organization-fields { margin: 20px 0; padding: 16px; border: 1px solid #cfe2d7; border-radius: 6px; background: #f8fbf9; }
+        .organization-fields h3 { margin: 0 0 12px; font-size: 17px; }
+        .help { margin: 6px 0 0; color: #566573; font-size: 13px; line-height: 1.5; }
         .password-field { display: flex; gap: 8px; }
         .password-field input { flex: 1; min-width: 0; }
         .toggle-password { width: auto; flex: 0 0 auto; padding: 0 12px; background: #e8f2ec; color: #246b48; font-size: 14px; }
@@ -38,6 +42,14 @@
         <form action="{{ url_for('register') }}" method="POST">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <div class="form-group">
+                <label for="account_type">登録するアカウント</label>
+                <select id="account_type" name="account_type" required>
+                    <option value="individual" {% if account_type == 'individual' %}selected{% endif %}>個人</option>
+                    <option value="organization" {% if account_type == 'organization' %}selected{% endif %}>団体（管理者審査あり）</option>
+                </select>
+                <p class="help">団体を選ぶと、団体情報を管理者へ申請します。審査・承認後に主催者機能を利用できます。</p>
+            </div>
+            <div class="form-group">
                 <label for="name">お名前</label>
                 <input type="text" id="name" name="name" required maxlength="80" placeholder="エコ 太郎" value="{{ name }}">
             </div>
@@ -52,6 +64,22 @@
                     <button type="button" class="toggle-password" aria-controls="password" aria-pressed="false">表示</button>
                 </div>
             </div>
+            <section id="organization-fields" class="organization-fields" {% if account_type != 'organization' %}hidden{% endif %}>
+                <h3>団体情報・審査申請</h3>
+                <div class="form-group">
+                    <label for="organization_name">団体名</label>
+                    <input type="text" id="organization_name" name="organization_name" maxlength="100" value="{{ organization_name }}" {% if account_type == 'organization' %}required{% endif %}>
+                </div>
+                <div class="form-group">
+                    <label for="organization_contact">団体の連絡先</label>
+                    <input type="text" id="organization_contact" name="organization_contact" maxlength="200" value="{{ organization_contact }}" {% if account_type == 'organization' %}required{% endif %}>
+                </div>
+                <div class="form-group">
+                    <label for="organization_purpose">団体の活動内容・利用目的</label>
+                    <textarea id="organization_purpose" name="organization_purpose" maxlength="1000" {% if account_type == 'organization' %}required{% endif %}>{{ organization_purpose }}</textarea>
+                </div>
+                <p class="help">申請は管理者の審査待ちとなります。承認されるまでは個人アカウントとして利用できます。</p>
+            </section>
             <button type="submit">アカウント作成</button>
             <p class="submit-status" id="submit-status" role="status" aria-live="polite"></p>
         </form>
@@ -61,6 +89,19 @@
         </div>
     </div>
     <script>
+        const accountType = document.getElementById('account_type');
+        const organizationFields = document.getElementById('organization-fields');
+        const organizationInputs = organizationFields.querySelectorAll('input, textarea');
+        const updateOrganizationFields = () => {
+            const isOrganization = accountType.value === 'organization';
+            organizationFields.hidden = !isOrganization;
+            organizationInputs.forEach((input) => {
+                input.required = isOrganization;
+            });
+        };
+        accountType.addEventListener('change', updateOrganizationFields);
+        updateOrganizationFields();
+
         document.querySelector('form').addEventListener('submit', () => {
             const status = document.getElementById('submit-status');
             status.textContent = '送信しています…';

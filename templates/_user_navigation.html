@@ -47,10 +47,8 @@
         <a href="{{ url_for('trash_bin') }}">📸 エコごみ箱・AI判定</a>
         {% endif %}
         <a href="{{ url_for('improvement_proposals_board') }}">💡 地域改善提案・アクションプラン</a>
-        {% if view_mode == 'pc' %}
-            <a href="{{ url_for('all_events') }}">📅 イベント一覧</a>
-            <a href="{{ url_for('my_reservations') }}">📌 予約したイベント</a>
-        {% endif %}
+        <a href="{{ url_for('all_events') }}">📅 イベント一覧</a>
+        <a href="{{ url_for('my_reservations') }}">📌 予約したイベント</a>
         <a href="{{ url_for('mypage') }}">📊 マイページ・カレンダー・実績</a>
         <a href="{{ url_for('exchange_page') }}">🎁 特典交換</a>
         <a href="{{ url_for('user_notifications') }}">🔔 通知{% if unread_notifications %}（未読{{ unread_notifications }}件）{% endif %}</a>

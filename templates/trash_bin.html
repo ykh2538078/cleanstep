@@ -120,13 +120,16 @@
                 </div>
 
                 <div class="form-group">
-                    <label for="bag_size">推定量・袋のサイズ目安</label>
+                    <label for="bag_size">回収量の目安（参考・ポイント計算対象外）</label>
                     <select id="bag_size" name="bag_size">
-                        <option value="手持ち・少量（1〜3個）">✋ 手持ち・少量（1〜3個）</option>
-                        <option value="小袋（レジ袋・5L相当）">🛍️ 小袋（レジ袋・5L相当）</option>
-                        <option value="中袋（20L相当）">🗑️ 中袋（20L相当）</option>
-                        <option value="大袋（45L相当）">📦 大袋（45L相当）</option>
+                        <option value="手持ち・少量（1〜3個）" {% if bag_size == '手持ち・少量（1〜3個）' %}selected{% endif %}>✋ 手持ち・少量（1〜3個）</option>
+                        <option value="小袋（レジ袋・5L相当）" {% if bag_size == '小袋（レジ袋・5L相当）' %}selected{% endif %}>🛍️ 小袋（レジ袋・5L相当）</option>
+                        <option value="中袋（20L相当）" {% if bag_size == '中袋（20L相当）' %}selected{% endif %}>🗑️ 中袋（20L相当）</option>
+                        <option value="大袋（45L相当）" {% if bag_size == '大袋（45L相当）' %}selected{% endif %}>📦 大袋（45L相当）</option>
                     </select>
+                    <p style="font-size:12px; color:#7f8c8d; line-height:1.5; margin:6px 0 0;">
+                        袋サイズは地域の回収量傾向を把握するための自己申告です。ごみ箱への持ち込みポイントはAI検出数×5で、袋サイズや申告個数では変わりません。
+                    </p>
                 </div>
 
                 <div class="form-group">

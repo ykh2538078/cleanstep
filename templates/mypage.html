@@ -19,6 +19,19 @@
         .outside { color: #829089; background: #f6f7f7; }
         .activity { display: block; margin-top: 5px; font-size: .78rem; overflow-wrap: anywhere; }
         .history-item { padding: 11px 0; border-bottom: 1px solid #e6ece8; }
+        .reflection-item { padding: 12px 0; border-bottom: 1px solid #e6ece8; line-height: 1.6; overflow-wrap: anywhere; }
+        .reflection-item:last-child { border-bottom: 0; }
+        .behavior-trends { margin: 16px 0; padding: 20px; background: #fff; border: 1px solid #dce5e1; border-radius: 10px; }
+        .behavior-month { padding: 14px 0; border-bottom: 1px solid #e6ece8; }
+        .behavior-month:last-child { border-bottom: 0; }
+        .behavior-month h3 { margin: 0 0 10px; font-size: 1rem; }
+        .behavior-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+        .behavior-metric { font-size: .88rem; }
+        .behavior-metric-label { display: flex; justify-content: space-between; gap: 8px; }
+        .behavior-track { height: 8px; margin-top: 5px; overflow: hidden; background: #e8efeb; border-radius: 999px; }
+        .behavior-bar { height: 100%; background: #28845a; border-radius: inherit; }
+        .survey-link { display: inline-flex; min-height: 42px; align-items: center; margin-top: 8px; padding: 0 14px; border-radius: 8px; background: #257a52; color: #fff; font-weight: 700; text-decoration: none; }
+        .reflection-muted { color: #64748b; font-size: .9rem; }
         @media (max-width: 600px) { th, td { padding: 4px; font-size: .78rem; } td { height: 70px; } .activity { font-size: .68rem; } }
     </style>
 </head>
@@ -31,6 +44,7 @@
             <p>{{ user.email }}</p>
             <div class="stats">
                 <div class="stat">保有ポイント<strong>{{ user.total_points }} pt</strong></div>
+                <div class="stat">確認待ち（仮）ポイント<strong>{{ report.pending_point_total }} pt</strong></div>
                 <div class="stat">累計回収ごみ数<strong>{{ report.my_total_trash }} 個</strong></div>
                 <div class="stat">イベント参加数<strong>{{ report.my_event_count }} 回</strong></div>
                 <div class="stat">課題報告 / 改善提案<strong>{{ report.my_issue_report_count }} / {{ report.my_proposal_count }} 件</strong></div>
@@ -59,7 +73,16 @@
                         <td class="{{ 'outside' if day.month != month.month }}">
                             {{ day.day }}
                             {% for activity in activities_by_date.get(day.strftime('%Y-%m-%d'), []) %}
-                                <span class="activity">{{ activity.title }}<br>+{{ activity.points_earned }} pt</span>
+                                <span class="activity">
+                                    {{ activity.title }}<br>
+                                    {% if activity.points_status == 'pending' %}
+                                        確認待ち +{{ activity.points_pending }} pt（仮）
+                                    {% elif activity.points_status == 'cancelled' %}
+                                        確定ポイントなし
+                                    {% else %}
+                                        +{{ activity.points_earned }} pt
+                                    {% endif %}
+                                </span>
                             {% endfor %}
                         </td>
                     {% endfor %}</tr>
@@ -70,9 +93,81 @@
         <section class="history">
             <h2>最近の活動実績</h2>
             {% for activity in history %}
-                <div class="history-item">{{ activity.title }} · {{ activity.date|jst_datetime }} · +{{ activity.points_earned }} pt</div>
+                <div class="history-item">
+                    {{ activity.title }} · {{ activity.date|jst_datetime }} ·
+                    {% if activity.points_status == 'pending' %}
+                        確認待ち +{{ activity.points_pending }} pt（仮）
+                    {% elif activity.points_status == 'cancelled' %}
+                        確定ポイントなし
+                    {% else %}
+                        +{{ activity.points_earned }} pt
+                    {% endif %}
+                </div>
             {% else %}
                 <p>活動記録はまだありません。</p>
+            {% endfor %}
+        </section>
+        <section class="behavior-trends" aria-labelledby="behavior-trends-title">
+            <h2 id="behavior-trends-title">振り返りに記録された行動の推移</h2>
+            <p class="reflection-muted">直近6か月の振り返り回答のうち、各項目を記入した件数です。能力や成長を評価する点数ではなく、未記入はその行動がなかったことを意味しません。</p>
+            {% if report.reflection_behavior_trends %}
+                {% for trend in report.reflection_behavior_trends %}
+                    <article class="behavior-month">
+                        <h3>{{ trend.month }} · 回答 {{ trend.responses }} 件</h3>
+                        <div class="behavior-metrics">
+                            {% for label, key in [
+                                ('課題への気づき', 'issue_noticing'),
+                                ('原因の考察', 'cause_analysis'),
+                                ('協力したこと', 'collaboration'),
+                                ('次の改善案', 'next_improvement')
+                            ] %}
+                                {% set count = trend[key] %}
+                                {% set ratio = (count * 100 / trend.responses) if trend.responses else 0 %}
+                                <div class="behavior-metric">
+                                    <div class="behavior-metric-label">
+                                        <span>{{ label }}</span><strong>{{ count }} / {{ trend.responses }} 件</strong>
+                                    </div>
+                                    <div class="behavior-track" role="img" aria-label="{{ label }}を記入した回答 {{ count }} 件">
+                                        <div class="behavior-bar" style="width: {{ ratio }}%"></div>
+                                    </div>
+                                </div>
+                            {% endfor %}
+                        </div>
+                    </article>
+                {% endfor %}
+            {% else %}
+                <p class="reflection-muted">振り返りデータがまだありません。</p>
+            {% endif %}
+        </section>
+        <section class="history" aria-labelledby="reflection-title">
+            <h2 id="reflection-title">活動後の振り返りと次の行動</h2>
+            {% if report.pending_event_surveys %}
+                <div class="reflection-item">
+                    <strong>振り返りを記録できます</strong>
+                    <p class="reflection-muted">イベント参加後の気づきや次の改善案を残すと、このレポートに蓄積されます。</p>
+                    {% for activity in report.pending_event_surveys %}
+                        <div>
+                            {{ activity.event_name or activity.title }} · {{ activity.activity_date|jst_datetime }}
+                            <br><a class="survey-link" href="{{ url_for('event_survey', activity_id=activity.activity_id) }}">振り返りを記入</a>
+                        </div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+            {% for reflection in report.recent_reflections %}
+                <article class="reflection-item">
+                    <strong>{{ reflection.event_name or 'イベント参加' }}</strong>
+                    <span class="reflection-muted"> · 満足度 ★{{ reflection.satisfaction }}</span>
+                    {% if reflection.noticed_issue %}<div>🔍 気づいた問題：{{ reflection.noticed_issue }}</div>{% endif %}
+                    {% if reflection.suspected_cause %}<div>💡 原因の考察：{{ reflection.suspected_cause }}</div>{% endif %}
+                    {% if reflection.collaboration_note %}<div>🤝 協力した点：{{ reflection.collaboration_note }}</div>{% endif %}
+                    {% if reflection.next_improvement %}<div>🚀 次の改善案：{{ reflection.next_improvement }}</div>{% endif %}
+                    {% if reflection.comment %}<div>💬 コメント：{{ reflection.comment }}</div>{% endif %}
+                    {% if reflection.action_note %}<div class="reflection-muted">↪ 主催団体からの返信：{{ reflection.action_note }}</div>{% endif %}
+                </article>
+            {% else %}
+                {% if not report.pending_event_surveys %}
+                    <p class="reflection-muted">イベントに参加して振り返りを記入すると、気づきや改善案がここに蓄積されます。</p>
+                {% endif %}
             {% endfor %}
         </section>
     </main>

@@ -18,7 +18,13 @@
         .status-open { background: #fee2e2; color: #991b1b; }
         .status-in_progress { background: #fef3c7; color: #92400e; }
         .status-resolved { background: #dcfce7; color: #166534; }
+        .environment-unverified { background: #e2e8f0; color: #334155; }
+        .environment-improved { background: #dcfce7; color: #166534; }
+        .environment-unchanged { background: #fef3c7; color: #92400e; }
+        .environment-worsened, .environment-recurred { background: #fee2e2; color: #991b1b; }
         input[type="text"], select { padding: 7px 9px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 13px; }
+        input[type="date"], textarea { width: 100%; box-sizing: border-box; padding: 7px 9px; border: 1px solid #cbd5e1; border-radius: 6px; font: inherit; }
+        textarea { resize: vertical; }
         button { padding: 7px 12px; border: 0; border-radius: 6px; background: #257a52; color: #fff; font-weight: 700; cursor: pointer; font-size: 12px; }
         .flash-msg { padding: 12px 16px; border-radius: 8px; background: #eef7f1; border: 1px solid #ccebdd; color: #17633f; margin-bottom: 16px; font-weight: 700; }
     </style>
@@ -46,9 +52,10 @@
 
         <div class="grid-2">
             <section style="margin:0;">
-                <h2>📍 場所別の課題発生・解決状況（集中地点分析）</h2>
+                <h2>📍 対応状況と環境変化は別々に集計</h2>
+                <p>「対応済み」は作業・処置の完了を示し、地域環境が改善したことを意味しません。現地確認後に環境変化を別途記録してください。</p>
                 <table>
-                    <thead><tr><th>場所・エリア</th><th>報告総数</th><th>未解決</th><th>解決済み</th></tr></thead>
+                    <thead><tr><th>場所・エリア</th><th>報告総数</th><th>未解決</th><th>対応済み</th><th>環境変化（改善 / 変化なし / 悪化 / 再発 / 未確認）</th></tr></thead>
                     <tbody>
                         {% for row in by_location %}
                             <tr>
@@ -56,6 +63,7 @@
                                 <td>{{ row.issue_count }} 件</td>
                                 <td style="color:#b91c1c; font-weight:700;">{{ row.open_count }} 件</td>
                                 <td style="color:#15803d;">{{ row.resolved_count }} 件</td>
+                                <td>{{ row.improved_count }} / {{ row.unchanged_count }} / {{ row.worsened_count }} / {{ row.recurred_count }} / {{ row.unverified_count }}</td>
                             </tr>
                         {% else %}
                             <tr><td colspan="4">課題報告データはまだありません。</td></tr>
@@ -99,6 +107,114 @@
         </div>
 
         <section>
+            <h2>🗺️ 課題報告地点と登録ごみ箱の距離分析</h2>
+            <p>位置情報付き課題報告について、直線距離で最も近い登録ごみ箱までの距離を、ごみの種類別に集計しています。距離帯は100m以内、100m超〜300m以内、300m超です。登録場所との距離関係を示す記述的な集計で、ごみ箱が原因または解決策であることを示すものではありません。</p>
+            <p>座標なし {{ issues_without_coordinates }} 件 · 登録ごみ箱なし {{ issues_without_registered_bins }} 件は距離集計の対象外です。</p>
+            <table>
+                <thead><tr><th>報告のごみ種類</th><th>最寄りごみ箱までの距離帯</th><th>報告件数</th><th>平均距離</th></tr></thead>
+                <tbody>
+                    {% for row in bin_proximity_summary %}
+                        <tr>
+                            <td>{{ row.trash_type }}</td>
+                            <td>{{ row.distance_band }}</td>
+                            <td>{{ row.report_count }} 件</td>
+                            <td>{{ row.average_distance_m }} m</td>
+                        </tr>
+                    {% else %}
+                        <tr><td colspan="4">位置情報付き課題報告と登録ごみ箱が揃ったデータはまだありません。</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% if issue_bin_proximity %}
+                <h3 style="font-size:14px; margin:16px 0 8px; color:#17633f;">各報告の最寄りごみ箱（最新20件）</h3>
+                <table>
+                    <thead><tr><th>課題・場所</th><th>ごみ種類</th><th>最寄りごみ箱</th><th>距離</th><th>受入種類 / 状態</th></tr></thead>
+                    <tbody>
+                        {% for row in issue_bin_proximity %}
+                            <tr>
+                                <td><strong>{{ row.title }}</strong><br>{{ row.location }}</td>
+                                <td>{{ row.trash_type }}</td>
+                                <td>{{ row.nearest_bin_name }}</td>
+                                <td>{{ row.nearest_bin_distance_m }} m</td>
+                                <td>{{ row.nearest_bin_waste_types }} / {{ {'active': '利用可能', 'full_reported': '満杯報告あり', 'maintenance': 'メンテナンス中'}.get(row.nearest_bin_status, row.nearest_bin_status) }}</td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            {% endif %}
+        </section>
+
+        <section>
+            <h2>📈 地域課題の月別推移（直近12か月）</h2>
+            <p>報告件数と対応状況、現地確認された環境変化を月ごとに表示します。報告のない月は0件として表示されます。報告月と改善確認月は同一とは限りません。</p>
+            <table>
+                <thead>
+                    <tr>
+                        <th>年月</th>
+                        <th>報告</th>
+                        <th>未対応</th>
+                        <th>対応中</th>
+                        <th>対応済み</th>
+                        <th>環境改善</th>
+                        <th>変化なし</th>
+                        <th>悪化</th>
+                        <th>再発</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in issue_time_series %}
+                        <tr data-month="{{ row.month }}">
+                            <td>{{ row.month }}</td>
+                            <td>{{ row.report_count }}</td>
+                            <td>{{ row.open_count }}</td>
+                            <td>{{ row.in_progress_count }}</td>
+                            <td>{{ row.resolved_count }}</td>
+                            <td>{{ row.improved_count }}</td>
+                            <td>{{ row.unchanged_count }}</td>
+                            <td>{{ row.worsened_count }}</td>
+                            <td>{{ row.recurred_count }}</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </section>
+
+        <section>
+            <h2>🔁 同じ場所での再報告・再発分析</h2>
+            <p>場所名が完全一致する課題報告を時系列で集計しています。再報告は同じ場所で報告が繰り返されたことを示し、環境の再発確認とは別の指標です。</p>
+            <table>
+                <thead>
+                    <tr>
+                        <th>場所</th>
+                        <th>報告総数</th>
+                        <th>初回報告</th>
+                        <th>最新報告</th>
+                        <th>報告間隔（日・平均）</th>
+                        <th>環境の再発確認</th>
+                        <th>最新の対応状況</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% set issue_status_labels = {'open': '未対応', 'in_progress': '対応中', 'resolved': '対応済み'} %}
+                    {% set environment_labels = {'unverified': '未確認', 'improved': '改善を確認', 'unchanged': '変化なし', 'worsened': '悪化', 'recurred': '再発を確認'} %}
+                    {% for row in location_recurrence %}
+                        <tr>
+                            <td><strong>{{ row.location }}</strong></td>
+                            <td>{{ row.report_count }}（再報告 {{ row.repeat_report_count }} 回）</td>
+                            <td>{{ row.first_reported_at|jst_datetime }}</td>
+                            <td>{{ row.last_reported_at|jst_datetime }}</td>
+                            <td>{{ row.average_days_between_reports if row.average_days_between_reports is not none else '—' }}</td>
+                            <td>{{ row.confirmed_recurrence_count }} 件</td>
+                            <td>{{ issue_status_labels.get(row.latest_status, row.latest_status) }} · {{ environment_labels.get(row.latest_environment_status, '未確認') }}</td>
+                        </tr>
+                    {% else %}
+                        <tr><td colspan="7">同じ場所からの複数報告はまだありません。</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </section>
+
+        <section>
             <h2>🚩 地域課題報告一覧と対応ステータス管理（{{ issues|length }} 件）</h2>
             {% set status_names = {'open': '未対応', 'in_progress': '対応中・現地確認中', 'resolved': '解決済み'} %}
             <table>
@@ -108,8 +224,9 @@
                         <th>タイトル・場所</th>
                         <th>種類 / 深刻度 / AI推定</th>
                         <th>詳細メモ</th>
-                        <th>現在の状態</th>
-                        {% if is_admin %}<th>ステータス・対応メモ更新</th>{% endif %}
+                        <th>対応状況</th>
+                        <th>環境変化の確認</th>
+                        {% if is_admin %}<th>対応・環境記録の更新</th>{% endif %}
                     </tr>
                 </thead>
                 <tbody>
@@ -140,32 +257,86 @@
                                     </a>
                                 </div>
                             </td>
+                            <td>
+                                {% set environment_labels = {'unverified': '未確認', 'improved': '改善を確認', 'unchanged': '変化なし', 'worsened': '悪化', 'recurred': '再発'} %}
+                                <span class="badge environment-{{ issue.environment_status }}">{{ environment_labels.get(issue.environment_status, '未確認') }}</span>
+                                {% if issue.environment_note %}
+                                    <div style="margin-top:6px;">{{ issue.environment_note }}</div>
+                                    {% if issue.environment_checked_at %}<small>{{ issue.environment_checked_at|jst_datetime }}</small>{% endif %}
+                                {% else %}
+                                    <div style="margin-top:6px; color:#64748b;">対応状況からは環境改善を判断していません。</div>
+                                {% endif %}
+                            </td>
                             {% if is_admin %}
                             <td>
                                 <form method="POST" action="{{ url_for('admin_issue_status_update', issue_id=issue.id) }}" style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
                                     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                    <div>
                                     <select name="status">
                                         <option value="open" {% if issue.status == 'open' %}selected{% endif %}>未対応</option>
                                         <option value="in_progress" {% if issue.status == 'in_progress' %}selected{% endif %}>対応中・現地確認中</option>
                                         <option value="resolved" {% if issue.status == 'resolved' %}selected{% endif %}>解決済み</option>
                                     </select>
                                     <input type="text" name="action_note" value="{{ issue.action_note or '' }}" placeholder="対応メモ（報告者に通知）" maxlength="500">
+                                    </div>
+                                    <div>
+                                    <label for="environment-status-{{ issue.id }}">現地確認後の環境変化</label>
+                                    <select id="environment-status-{{ issue.id }}" name="environment_status">
+                                        <option value="unverified" {% if issue.environment_status == 'unverified' %}selected{% endif %}>未確認</option>
+                                        <option value="improved" {% if issue.environment_status == 'improved' %}selected{% endif %}>改善を確認</option>
+                                        <option value="unchanged" {% if issue.environment_status == 'unchanged' %}selected{% endif %}>変化なし</option>
+                                        <option value="worsened" {% if issue.environment_status == 'worsened' %}selected{% endif %}>悪化</option>
+                                        <option value="recurred" {% if issue.environment_status == 'recurred' %}selected{% endif %}>再発</option>
+                                    </select>
+                                    <input type="text" name="environment_note" value="{{ issue.environment_note or '' }}" placeholder="現地確認の根拠（未確認以外は必須）" maxlength="500">
+                                    </div>
                                     <button type="submit">保存</button>
                                 </form>
                             </td>
                             {% endif %}
                         </tr>
                     {% else %}
-                        <tr><td colspan="6">報告された地域課題はまだありません。</td></tr>
+                        <tr><td colspan="{{ 7 if is_admin else 6 }}">報告された地域課題はまだありません。</td></tr>
                     {% endfor %}
                 </tbody>
             </table>
         </section>
 
         <section>
-            <h2>✨ 清掃イベント参加者の役割・活動前後の状態変化（再発チェック）</h2>
+            <h2>✨ 清掃前後の状態比較（参加者の自己評価）</h2>
+            <p>活動時に参加者が選択した状態の組み合わせと記録件数です。実測値や独立した現地検証ではなく、清掃の効果を因果的に証明するものではありません。</p>
             <table>
-                <thead><tr><th>日時</th><th>イベント・場所</th><th>参加者の役割</th><th>活動前の状態</th><th>活動後の状態・再発リスク</th></tr></thead>
+                <thead><tr><th>場所</th><th>活動前</th><th>活動後</th><th>比較結果（自己評価）</th><th>記録数</th></tr></thead>
+                <tbody>
+                    {% for comparison in event_state_comparisons %}
+                        <tr>
+                            <td>{{ comparison.location or '場所未登録' }}</td>
+                            <td>{{ comparison.before_state }}</td>
+                            <td>{{ comparison.after_state }}</td>
+                            <td>
+                                {% if comparison.after_state == 'まだ課題が残っている（追加対応が必要）' %}
+                                    課題継続・追加対応が必要
+                                {% elif comparison.before_state == '比較的きれいだった（予防清掃）' %}
+                                    {% if comparison.after_state == '大幅にきれいになった' %}きれいな状態を維持{% else %}再発注意{% endif %}
+                                {% elif comparison.after_state == 'きれいになったが再発注意' %}
+                                    改善・再発注意
+                                {% else %}
+                                    改善
+                                {% endif %}
+                            </td>
+                            <td>{{ comparison.activity_count }}</td>
+                        </tr>
+                    {% else %}
+                        <tr><td colspan="5">活動前後の状態が両方記録されたデータはまだありません。</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </section>
+
+        <section>
+            <h2>✨ 清掃イベント参加者の役割・活動前後の状態記録</h2>
+            <table>
+                <thead><tr><th>日時</th><th>イベント・場所</th><th>参加者の役割</th><th>活動前の状態</th><th>活動後の状態・再発リスク</th><th>比較（自己評価）</th></tr></thead>
                 <tbody>
                     {% for rec in event_state_changes %}
                         <tr>
@@ -174,9 +345,10 @@
                             <td>{{ rec.participant_role or '—' }}</td>
                             <td>{{ rec.before_state or '—' }}</td>
                             <td><strong>{{ rec.after_state or '—' }}</strong></td>
+                            <td>{{ rec.comparison_result }}</td>
                         </tr>
                     {% else %}
-                        <tr><td colspan="5">活動前後の状態記録はまだありません。</td></tr>
+                        <tr><td colspan="6">活動前後の状態記録はまだありません。</td></tr>
                     {% endfor %}
                 </tbody>
             </table>
@@ -189,20 +361,31 @@
                     <tr>
                         <th>提案タイトル / 対象場所</th>
                         <th>区分 / 関連課題</th>
-                        <th>提案内容</th>
+                        <th>提案内容 / 実施記録</th>
                         <th>賛同数</th>
                         <th>状態</th>
                         {% if is_admin %}<th>審査・コメント更新</th>{% endif %}
                     </tr>
                 </thead>
                 <tbody>
+                    {% set proposal_status_labels = {'proposed': '提案中', 'under_review': '検討中', 'adopted': '採用・実施決定', 'completed': '対策完了'} %}
                     {% for p in proposals %}
                         <tr>
                             <td><strong>{{ p.title }}</strong><br>📍 {{ p.location }}</td>
                             <td>{{ p.proposal_type }}<br><small>{{ p.issue_title or '—' }}</small></td>
-                            <td>{{ p.description }}</td>
+                            <td>
+                                {{ p.description }}
+                                {% if p.implementation_details or p.implemented_on or p.outcome_note %}
+                                    <div style="margin-top:8px; padding-top:8px; border-top:1px solid #dce5e1;">
+                                        <strong>実施記録</strong>
+                                        <div>実施日: {{ p.implemented_on or '未記録' }}</div>
+                                        <div>実施内容: {{ p.implementation_details or '未記録' }}</div>
+                                        <div>実施後の結果: {{ p.outcome_note or '未記録' }}</div>
+                                    </div>
+                                {% endif %}
+                            </td>
                             <td><strong>👍 {{ p.support_count }}</strong></td>
-                            <td>{{ p.status }}</td>
+                            <td>{{ proposal_status_labels.get(p.status, p.status) }}</td>
                             {% if is_admin %}
                             <td>
                                 <form method="POST" action="{{ url_for('admin_proposal_status_update', proposal_id=p.id) }}" style="display:flex; gap:6px; flex-wrap:wrap;">
@@ -214,6 +397,12 @@
                                         <option value="completed" {% if p.status == 'completed' %}selected{% endif %}>対策完了</option>
                                     </select>
                                     <input type="text" name="admin_comment" value="{{ p.admin_comment or '' }}" placeholder="管理者コメント" maxlength="500">
+                                    <label for="implementation-details-{{ p.id }}">実施内容</label>
+                                    <textarea id="implementation-details-{{ p.id }}" name="implementation_details" maxlength="1000" rows="2" placeholder="実際に行った対策">{{ p.implementation_details or '' }}</textarea>
+                                    <label for="implemented-on-{{ p.id }}">実施日</label>
+                                    <input id="implemented-on-{{ p.id }}" type="date" name="implemented_on" value="{{ p.implemented_on or '' }}">
+                                    <label for="outcome-note-{{ p.id }}">実施後の結果</label>
+                                    <textarea id="outcome-note-{{ p.id }}" name="outcome_note" maxlength="1000" rows="2" placeholder="実施後に確認した結果">{{ p.outcome_note or '' }}</textarea>
                                     <button type="submit">更新</button>
                                 </form>
                             </td>

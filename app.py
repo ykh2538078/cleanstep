@@ -1,6 +1,8 @@
 import os
 import sqlite3
 import json
+import io
+import zipfile
 import uuid
 import logging
 import hmac
@@ -12,10 +14,10 @@ import re
 import qrcode
 import sys
 import time
-from contextlib import closing
+from contextlib import closing, contextmanager
 from datetime import datetime, timedelta, timezone
 from functools import wraps
-from flask import Flask, flash, render_template, request, redirect, url_for, session, send_from_directory, abort, g
+from flask import Flask, flash, render_template, request, redirect, url_for, session, send_from_directory, send_file, abort, g
 from werkzeug.utils import secure_filename
 from dotenv import load_dotenv
 # パスワードをハッシュ化
@@ -40,6 +42,17 @@ def _internal_error_response():
         title='内部サーバーエラー',
         message='サーバーでエラーが発生しました。時間をおいて再度お試しください。',
     ), 500
+
+
+@contextmanager
+def immediate_transaction(conn):
+    conn.execute('BEGIN IMMEDIATE')
+    try:
+        yield
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 
 
 @app.errorhandler(500)
@@ -127,6 +140,15 @@ def suggest_event_category(*values):
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+
+TRASH_BAG_SIZE_OPTIONS = (
+    '手持ち・少量（1〜3個）',
+    '小袋（レジ袋・5L相当）',
+    '中袋（20L相当）',
+    '大袋（45L相当）',
+)
+
 
 # データベース接続と自動マイグレーション
 
@@ -571,9 +593,39 @@ def init_db():
                 ai_detected_count INTEGER,
                 status TEXT NOT NULL DEFAULT 'open'
                     CHECK(status IN ('open', 'in_progress', 'resolved')),
+                environment_status TEXT NOT NULL DEFAULT 'unverified'
+                    CHECK(environment_status IN (
+                        'unverified', 'improved', 'unchanged', 'worsened', 'recurred'
+                    )),
+                environment_note TEXT NOT NULL DEFAULT '',
+                environment_checked_by INTEGER REFERENCES users(id),
+                environment_checked_at TEXT,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users(id)
             )
+        ''')
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS issue_status_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                issue_id INTEGER NOT NULL,
+                previous_status TEXT,
+                new_status TEXT NOT NULL,
+                previous_action_note TEXT,
+                action_note TEXT NOT NULL DEFAULT '',
+                previous_environment_status TEXT,
+                new_environment_status TEXT,
+                environment_note TEXT NOT NULL DEFAULT '',
+                changed_by INTEGER,
+                changed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (issue_id)
+                    REFERENCES issue_reports(id),
+                FOREIGN KEY (changed_by)
+                    REFERENCES users(id)
+            )
+        ''')
+        conn.execute('''
+            CREATE INDEX IF NOT EXISTS idx_issue_status_history_issue
+            ON issue_status_history(issue_id, changed_at)
         ''')
         conn.execute('''
             CREATE INDEX IF NOT EXISTS idx_issue_reports_status_created
@@ -592,6 +644,21 @@ def init_db():
             )
         if 'reviewed_at' not in issue_cols:
             conn.execute('ALTER TABLE issue_reports ADD COLUMN reviewed_at TEXT')
+        issue_environment_migrations = {
+            'environment_status': (
+                "TEXT NOT NULL DEFAULT 'unverified' CHECK(environment_status IN "
+                "('unverified', 'improved', 'unchanged', 'worsened', 'recurred'))"
+            ),
+            'environment_note': "TEXT NOT NULL DEFAULT ''",
+            'environment_checked_by': 'INTEGER REFERENCES users(id)',
+            'environment_checked_at': 'TEXT',
+        }
+        for column, definition in issue_environment_migrations.items():
+            if column not in issue_cols:
+                conn.execute(
+                    f'ALTER TABLE issue_reports ADD COLUMN {column} {definition}'
+                )
+                issue_cols.append(column)
 
         conn.execute('''
             CREATE TABLE IF NOT EXISTS improvement_proposals (
@@ -612,6 +679,23 @@ def init_db():
                 FOREIGN KEY (user_id) REFERENCES users(id)
             )
         ''')
+        proposal_cols = {
+            row['name']
+            for row in conn.execute(
+                'PRAGMA table_info(improvement_proposals)'
+            )
+        }
+        proposal_migrations = {
+            'implementation_details': "TEXT NOT NULL DEFAULT ''",
+            'implemented_on': 'TEXT',
+            'outcome_note': "TEXT NOT NULL DEFAULT ''",
+        }
+        for column, definition in proposal_migrations.items():
+            if column not in proposal_cols:
+                conn.execute(
+                    f'ALTER TABLE improvement_proposals '
+                    f'ADD COLUMN {column} {definition}'
+                )
         conn.execute('''
             CREATE TABLE IF NOT EXISTS improvement_proposal_supports (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -718,6 +802,32 @@ def init_db():
                 ) VALUES (?, ?, 'owner')
             ''', (organization['id'], application['user_id']))
 
+        # 1人のユーザーが複数の承認済み団体に active 所属していないか確認する。
+        # 既存DBに重複がある場合は、勝手に所属を削除せず起動を止めて確認を促す。
+        duplicate_active_memberships = conn.execute('''
+            SELECT COUNT(*) FROM (
+                SELECT user_id
+                FROM organization_members
+                WHERE status = 'active'
+                GROUP BY user_id
+                HAVING COUNT(*) > 1
+            )
+        ''').fetchone()[0]
+        if duplicate_active_memberships:
+            app.logger.error(
+                'organization_membersに同一ユーザーの複数団体所属が%d件あります。',
+                duplicate_active_memberships,
+            )
+            raise RuntimeError(
+                'organization_membersの複数団体所属データを確認してください。'
+            )
+
+        conn.execute('''
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_organization_members_one_active_user
+            ON organization_members(user_id)
+            WHERE status = 'active'
+        ''')
+
         if login_destination_added:
             conn.execute('''
             UPDATE users
@@ -775,6 +885,10 @@ def init_db():
                 duration INTEGER DEFAULT 0,
                 distance REAL DEFAULT 0.0,
                 calories INTEGER DEFAULT 0,
+                points_status TEXT NOT NULL DEFAULT 'awarded'
+                    CHECK(points_status IN ('pending', 'awarded', 'cancelled')),
+                points_pending INTEGER NOT NULL DEFAULT 0
+                    CHECK(points_pending >= 0),
                 gps_measured INTEGER NOT NULL DEFAULT 0
                     CHECK(gps_measured IN (0, 1)),
                 step_source TEXT NOT NULL DEFAULT 'unmeasured'
@@ -851,6 +965,11 @@ def init_db():
             'ai_detected_count': 'INTEGER DEFAULT 0',
             'user_declared_count': 'INTEGER DEFAULT 0',
             'points_earned': 'INTEGER DEFAULT 0',
+            'points_status': (
+                "TEXT NOT NULL DEFAULT 'awarded' "
+                "CHECK(points_status IN ('pending', 'awarded', 'cancelled'))"
+            ),
+            'points_pending': 'INTEGER NOT NULL DEFAULT 0 CHECK(points_pending >= 0)',
             'steps': 'INTEGER DEFAULT 0',
             'duration': 'INTEGER DEFAULT 0',
             'distance': 'REAL DEFAULT 0.0',
@@ -875,6 +994,29 @@ def init_db():
                 conn.execute(
                     f'ALTER TABLE activity_history ADD COLUMN {column} {definition}'
                 )
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS activity_point_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                activity_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                event_type TEXT NOT NULL CHECK(event_type IN (
+                    'pending', 'awarded', 'adjusted', 'cancelled', 'reversed'
+                )),
+                points_delta INTEGER NOT NULL DEFAULT 0,
+                previous_points INTEGER NOT NULL DEFAULT 0,
+                new_points INTEGER NOT NULL DEFAULT 0,
+                pending_points INTEGER NOT NULL DEFAULT 0,
+                reason TEXT NOT NULL,
+                changed_by INTEGER REFERENCES users(id),
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (activity_id) REFERENCES activity_history(id),
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            )
+        ''')
+        conn.execute('''
+            CREATE INDEX IF NOT EXISTS idx_activity_point_history_activity
+            ON activity_point_history(activity_id, id)
+        ''')
         conn.execute('''
             UPDATE activity_history
             SET date = CURRENT_TIMESTAMP
@@ -959,6 +1101,33 @@ def init_db():
             WHERE image_sha256 IS NOT NULL
         ''')
         conn.execute('CREATE INDEX IF NOT EXISTS idx_ai_logs_user ON ai_logs(user_id)')
+
+        # 💡 修正①：既存DBに同一activity_idのAIログが複数ないか事前検証してから一意インデックスを作成
+        duplicate_ai_log_rows = conn.execute('''
+            SELECT COUNT(*) FROM (
+                SELECT activity_id
+                FROM ai_logs
+                WHERE activity_id IS NOT NULL
+                GROUP BY activity_id
+                HAVING COUNT(*) > 1
+            )
+        ''').fetchone()[0]
+        if duplicate_ai_log_rows:
+            app.logger.error(
+                'ai_logsに同一activity_idの重複記録が%d組あります。'
+                'データを保持するため一意制約の移行を中断しました。',
+                duplicate_ai_log_rows,
+            )
+            raise RuntimeError(
+                'ai_logsのactivity_id重複記録を確認してください。'
+                '既存データは変更していません。'
+            )
+        conn.execute('''
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_logs_activity_id
+            ON ai_logs(activity_id)
+            WHERE activity_id IS NOT NULL
+        ''')
+
         conn.execute('''
             CREATE TABLE IF NOT EXISTS ai_duplicate_attempts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1002,6 +1171,30 @@ def init_db():
                 FOREIGN KEY (reviewer_id) REFERENCES users(id)
             )
         ''')
+        verification_cols = {
+            row['name']
+            for row in conn.execute(
+                'PRAGMA table_info(activity_verifications)'
+            )
+        }
+        verification_annotation_columns = {
+            'verified_bottle_count': 'INTEGER',
+            'verified_cup_count': 'INTEGER',
+            'reviewer2_id': 'INTEGER REFERENCES users(id)',
+            'second_reviewed_at': 'TEXT',
+            'verified_bottle_count_2': 'INTEGER',
+            'verified_cup_count_2': 'INTEGER',
+            'adjudicated_bottle_count': 'INTEGER',
+            'adjudicated_cup_count': 'INTEGER',
+            'adjudicator_id': 'INTEGER REFERENCES users(id)',
+            'adjudicated_at': 'TEXT',
+        }
+        for column, definition in verification_annotation_columns.items():
+            if column not in verification_cols:
+                conn.execute(
+                    f'ALTER TABLE activity_verifications '
+                    f'ADD COLUMN {column} {definition}'
+                )
         conn.execute('''
             CREATE UNIQUE INDEX IF NOT EXISTS idx_activity_verification_ai_log
             ON activity_verifications(ai_log_id)
@@ -1040,6 +1233,27 @@ def init_db():
                 FOREIGN KEY (reviewer_id) REFERENCES users(id)
             )
         ''')
+        verification_history_cols = {
+            row['name']
+            for row in conn.execute(
+                'PRAGMA table_info(activity_verification_history)'
+            )
+        }
+        verification_history_columns = {
+            'verified_bottle_count': 'INTEGER',
+            'verified_cup_count': 'INTEGER',
+            'verified_bottle_count_2': 'INTEGER',
+            'verified_cup_count_2': 'INTEGER',
+            'adjudicated_bottle_count': 'INTEGER',
+            'adjudicated_cup_count': 'INTEGER',
+            'review_stage': "TEXT NOT NULL DEFAULT 'single'",
+        }
+        for column, definition in verification_history_columns.items():
+            if column not in verification_history_cols:
+                conn.execute(
+                    f'ALTER TABLE activity_verification_history '
+                    f'ADD COLUMN {column} {definition}'
+                )
         conn.execute('''
             CREATE INDEX IF NOT EXISTS idx_activity_verification_history_target
             ON activity_verification_history(target_type, activity_id, ai_log_id)
@@ -1360,7 +1574,7 @@ def verification_fingerprint(target_type, row):
         fields = (
             'id', 'activity_id', 'detected_count', 'confidence',
             'image_path', 'created_at', 'result_status', 'is_flagged',
-            'flag_reason',
+            'flag_reason', 'detected_classes_json',
         )
     elif target_type == 'user_declaration':
         fields = ('id', 'type', 'title', 'user_declared_count')
@@ -1376,6 +1590,28 @@ def verification_fingerprint(target_type, row):
         snapshot, sort_keys=True, separators=(',', ':'), ensure_ascii=True
     ).encode('utf-8')
     return hashlib.sha256(encoded).hexdigest()
+
+
+def parse_ai_detected_classes(value):
+    if value is None or value == '':
+        return None
+    try:
+        counts = json.loads(value)
+        if not isinstance(counts, dict):
+            return None
+        parsed = {}
+        for class_name in ('bottle', 'cup'):
+            count = counts.get(class_name)
+            if (
+                not isinstance(count, int)
+                or isinstance(count, bool)
+                or count < 0
+            ):
+                return None
+            parsed[class_name] = count
+        return parsed
+    except (json.JSONDecodeError, ValueError, TypeError):
+        return None
 
 
 def load_verification_states(conn):
@@ -1400,16 +1636,16 @@ def get_verification_state(conn, target_type, row, current_states=None):
         current = current_states.get((target_type, target_id))
     elif target_type == 'ai_result':
         current = conn.execute('''
-            SELECT status, reviewer_id, reviewed_at, review_note,
-                   source_fingerprint, u.name AS reviewer_name
+            SELECT activity_verifications.*,
+                   u.name AS reviewer_name
             FROM activity_verifications
             JOIN users u ON u.id = activity_verifications.reviewer_id
             WHERE target_type = ? AND ai_log_id = ?
         ''', (target_type, row['id'])).fetchone()
     else:
         current = conn.execute('''
-            SELECT status, reviewer_id, reviewed_at, review_note,
-                   source_fingerprint, u.name AS reviewer_name
+            SELECT activity_verifications.*,
+                   u.name AS reviewer_name
             FROM activity_verifications
             JOIN users u ON u.id = activity_verifications.reviewer_id
             WHERE target_type = ? AND activity_id = ?
@@ -1422,18 +1658,92 @@ def get_verification_state(conn, target_type, row, current_states=None):
             'reviewer_name': None,
             'reviewed_at': None,
             'review_note': None,
+            'verified_bottle_count': None,
+            'verified_cup_count': None,
+            'reviewer2_id': None,
+            'second_reviewed_at': None,
+            'verified_bottle_count_2': None,
+            'verified_cup_count_2': None,
+            'adjudicated_bottle_count': None,
+            'adjudicated_cup_count': None,
+            'adjudicator_id': None,
+            'adjudicated_at': None,
+            'review_stage': 'single',
+            'consensus_bottle_count': None,
+            'consensus_cup_count': None,
             'stale': False,
         }
 
     stale = current['source_fingerprint'] != verification_fingerprint(
         target_type, row
     )
+    second_review_exists = current['reviewer2_id'] is not None
+    reviewer_counts_agree = (
+        second_review_exists
+        and current['verified_bottle_count']
+            == current['verified_bottle_count_2']
+        and current['verified_cup_count']
+            == current['verified_cup_count_2']
+    )
+    adjudicated = (
+        current['adjudicated_bottle_count'] is not None
+        and current['adjudicated_cup_count'] is not None
+    )
+    consensus_available = reviewer_counts_agree or adjudicated
     return {
-        'status': 'unreviewed' if stale else current['status'],
+        'status': (
+            'unreviewed'
+            if stale or (target_type == 'ai_result' and not consensus_available)
+            else current['status']
+        ),
         'reviewer_id': None if stale else current['reviewer_id'],
         'reviewer_name': None if stale else current['reviewer_name'],
         'reviewed_at': None if stale else current['reviewed_at'],
         'review_note': None if stale else current['review_note'],
+        'verified_bottle_count': (
+            None if stale else current['verified_bottle_count']
+        ),
+        'verified_cup_count': None if stale else current['verified_cup_count'],
+        'reviewer2_id': None if stale else current['reviewer2_id'],
+        'second_reviewed_at': None if stale else current['second_reviewed_at'],
+        'verified_bottle_count_2': (
+            None if stale else current['verified_bottle_count_2']
+        ),
+        'verified_cup_count_2': (
+            None if stale else current['verified_cup_count_2']
+        ),
+        'adjudicated_bottle_count': (
+            None if stale else current['adjudicated_bottle_count']
+        ),
+        'adjudicated_cup_count': (
+            None if stale else current['adjudicated_cup_count']
+        ),
+        'adjudicator_id': None if stale else current['adjudicator_id'],
+        'adjudicated_at': None if stale else current['adjudicated_at'],
+        'review_stage': (
+            'single'
+            if stale
+            else (
+                'adjudicated' if adjudicated
+                else 'agreed' if reviewer_counts_agree
+                else 'adjudication_pending' if second_review_exists
+                else 'second_review_pending'
+            )
+        ),
+        'consensus_bottle_count': (
+            None if stale or not consensus_available
+            else (
+                current['adjudicated_bottle_count']
+                if adjudicated else current['verified_bottle_count']
+            )
+        ),
+        'consensus_cup_count': (
+            None if stale or not consensus_available
+            else (
+                current['adjudicated_cup_count']
+                if adjudicated else current['verified_cup_count']
+            )
+        ),
         'stale': stale,
     }
 
@@ -1734,6 +2044,11 @@ def generate_user_report(conn, user_id):
 
     my_trash = user_stats['my_total_trash']
     my_events = user_stats['my_event_count']
+    pending_point_total = conn.execute('''
+        SELECT COALESCE(SUM(points_pending), 0)
+        FROM activity_history
+        WHERE user_id = ? AND points_status = 'pending'
+    ''', (user_id,)).fetchone()[0]
     monthly_trends = conn.execute('''
         SELECT
             strftime('%Y-%m', date(date, '+9 hours')) AS month,
@@ -1847,6 +2162,8 @@ def generate_user_report(conn, user_id):
     )
 
     recent_reflections = []
+    pending_event_surveys = []
+    reflection_behavior_trends = []
     try:
         recent_reflections = [
             dict(row) for row in conn.execute('''
@@ -1861,8 +2178,66 @@ def generate_user_report(conn, user_id):
                 LIMIT 5
             ''', (user_id,)).fetchall()
         ]
+        reflection_trend_rows = conn.execute('''
+            SELECT
+                strftime('%Y-%m', date(f.submitted_at, '+9 hours')) AS month,
+                COUNT(*) AS responses,
+                SUM(CASE WHEN trim(f.noticed_issue) <> '' THEN 1 ELSE 0 END)
+                    AS issue_noticing,
+                SUM(CASE WHEN trim(f.suspected_cause) <> '' THEN 1 ELSE 0 END)
+                    AS cause_analysis,
+                SUM(CASE WHEN trim(f.collaboration_note) <> '' THEN 1 ELSE 0 END)
+                    AS collaboration,
+                SUM(CASE WHEN trim(f.next_improvement) <> '' THEN 1 ELSE 0 END)
+                    AS next_improvement
+            FROM event_feedback f
+            WHERE f.user_id = ?
+                AND date(f.submitted_at, '+9 hours') >= ?
+                AND date(f.submitted_at, '+9 hours') < ?
+            GROUP BY month
+        ''', (
+            user_id, six_month_start.isoformat(), following_month.isoformat(),
+        )).fetchall()
+        reflection_trends_by_month = {
+            row['month']: dict(row) for row in reflection_trend_rows
+        }
+        reflection_behavior_trends = []
+        trend_month = six_month_start
+        for _ in range(6):
+            month_key = trend_month.strftime('%Y-%m')
+            reflection_behavior_trends.append(
+                reflection_trends_by_month.get(month_key, {
+                    'month': month_key,
+                    'responses': 0,
+                    'issue_noticing': 0,
+                    'cause_analysis': 0,
+                    'collaboration': 0,
+                    'next_improvement': 0,
+                })
+            )
+            trend_month = (
+                trend_month.replace(year=trend_month.year + 1, month=1)
+                if trend_month.month == 12
+                else trend_month.replace(month=trend_month.month + 1)
+            )
+        pending_event_surveys = [
+            dict(row) for row in conn.execute('''
+                SELECT a.id AS activity_id, a.title,
+                       e.name AS event_name, a.date AS activity_date
+                FROM activity_history a
+                LEFT JOIN events e ON e.id = a.event_id
+                LEFT JOIN event_feedback f
+                    ON f.activity_id = a.id AND f.user_id = a.user_id
+                WHERE a.user_id = ? AND a.type = 'event'
+                    AND f.id IS NULL
+                ORDER BY a.date DESC, a.id DESC
+                LIMIT 5
+            ''', (user_id,)).fetchall()
+        ]
     except sqlite3.OperationalError:
         recent_reflections = []
+        pending_event_surveys = []
+        reflection_behavior_trends = []
 
     proposal_count = 0
     try:
@@ -1919,6 +2294,7 @@ def generate_user_report(conn, user_id):
     return {
         "my_total_trash": my_trash,
         "my_event_count": my_events,
+        "pending_point_total": pending_point_total,
         "my_trash_bin_action_count": trash_bin_actions,
         "my_issue_report_count": issue_report_count,
         "my_proposal_count": proposal_count,
@@ -1927,6 +2303,8 @@ def generate_user_report(conn, user_id):
         "weekday_trends": weekday_trends,
         "most_active_weekday": most_active_weekday,
         "recent_reflections": recent_reflections,
+        "reflection_behavior_trends": reflection_behavior_trends,
+        "pending_event_surveys": pending_event_surveys,
         "monthly_trends": [dict(month) for month in monthly_trends],
         "current_month": {
             'label': current_month.strftime('%Y年%m月'),
@@ -2208,11 +2586,21 @@ def mypage():
 
 @app.route('/events')
 @user_required
-@view_mode_required('pc')
 def all_events():
     conn = get_db()
     try:
-        events = conn.execute("""
+        search_query = request.args.get('q', '').strip()[:100]
+        search_sql = ''
+        search_params = []
+        if search_query:
+            search_term = f'%{search_query}%'
+            search_sql = '''
+                AND (
+                    e.name LIKE ? OR e.location LIKE ? OR e.category LIKE ?
+                )
+            '''
+            search_params = [search_term, search_term, search_term]
+        events = conn.execute(f"""
             SELECT e.*,
                    (SELECT COUNT(*) FROM event_reservations r
                     WHERE r.event_id = e.id AND r.status = 'reserved') AS reserved_count
@@ -2220,8 +2608,9 @@ def all_events():
             WHERE e.status = 'open' AND e.review_status = 'approved'
                 AND e.datetime >= datetime('now', '+9 hours')
                 AND e.datetime <= datetime('now', '+9 hours', '+365 days')
+                {search_sql}
             ORDER BY e.datetime
-        """).fetchall()
+        """, search_params).fetchall()
         reserved_events = {
             row['event_id'] for row in conn.execute("""
                 SELECT event_id FROM event_reservations
@@ -2241,13 +2630,13 @@ def all_events():
             reserved_events=reserved_events,
             joined_events=joined_events,
             is_reservation_list=False,
+            search_query=search_query,
         )
     finally:
         conn.close()
 
 @app.route('/my/reservations')
 @user_required
-@view_mode_required('pc')
 def my_reservations():
     conn = get_db()
     try:
@@ -2321,16 +2710,32 @@ def regional_map():
         ]
         issues = []
         hotspot_locations = []
+        is_organizer = bool(get_user_organization_id(conn, session['user_id']))
+        focus_issue_id = request.args.get('issue_id', type=int)
         try:
             issues = [
                 dict(row) for row in conn.execute('''
-                    SELECT i.*, u.name AS reporter_name
+                    SELECT i.*
                     FROM issue_reports i
-                    LEFT JOIN users u ON u.id = i.user_id
                     ORDER BY i.created_at DESC, i.id DESC
                     LIMIT 50
                 ''').fetchall()
             ]
+            events_by_location = {}
+            for event in events:
+                location_key = event['location'].strip().casefold()
+                events_by_location.setdefault(location_key, []).append(event)
+            for issue in issues:
+                issue['related_events'] = events_by_location.get(
+                    issue['location'].strip().casefold(), []
+                )
+                issue['proposal_url'] = url_for(
+                    'improvement_proposals_board',
+                    issue_id=issue['id'],
+                    location=issue['location'],
+                )
+                if issue['id'] == focus_issue_id:
+                    issue['focused'] = True
             hotspot_locations = [
                 dict(row) for row in conn.execute('''
                     SELECT location, COUNT(*) AS report_count,
@@ -2355,6 +2760,8 @@ def regional_map():
             hotspot_locations=hotspot_locations,
             full_bins_count=full_bins_count,
             open_issues_count=open_issues_count,
+            focus_issue_id=focus_issue_id,
+            is_organizer=is_organizer,
         )
     finally:
         conn.close()
@@ -2454,7 +2861,7 @@ def issue_report_new():
             conn = get_db()
             try:
                 with conn:
-                    conn.execute('''
+                    issue_cursor = conn.execute('''
                         INSERT INTO issue_reports (
                             user_id, title, location, latitude, longitude,
                             trash_type, severity, description, image_path,
@@ -2465,6 +2872,7 @@ def issue_report_new():
                         trash_type, severity, description, image_path,
                         ai_detected,
                     ))
+                    issue_id = issue_cursor.lastrowid
                     if trash_type == 'ごみ箱満杯・破損':
                         conn.execute('''
                             UPDATE trash_bins SET bin_status = 'full_reported'
@@ -2479,8 +2887,8 @@ def issue_report_new():
                         f'地域課題を報告しました：{title}',
                         f'場所：{location}\n種類：{trash_type}\n地域マップに共有されました。',
                     ))
-                flash('地域の課題報告を送信しました。地域マップに反映されました。', 'success')
-                return redirect(url_for('regional_map'))
+                flash('地域の課題報告を送信しました。地図から清掃イベントや改善提案につなげられます。', 'success')
+                return redirect(url_for('regional_map', issue_id=issue_id))
             finally:
                 conn.close()
 
@@ -2514,6 +2922,30 @@ def improvement_proposals_board():
     }
     conn = get_db()
     try:
+        raw_issue_id = form_values['issue_report_id']
+        if (
+            request.method == 'GET'
+            and raw_issue_id.isdigit()
+            and len(raw_issue_id) <= 10
+        ):
+            issue = conn.execute('''
+                SELECT title, location, trash_type, severity, description
+                FROM issue_reports WHERE id = ?
+            ''', (int(raw_issue_id),)).fetchone()
+            if issue:
+                form_values.update({
+                    'title': f"{issue['location']}の清掃・環境改善"[:100],
+                    'location': issue['location'],
+                    'proposal_type': (
+                        '重点清掃イベントの開催'
+                        if issue['severity'] == 'high'
+                        else PROPOSAL_TYPES[0]
+                    ),
+                    'description': (
+                        f"課題報告「{issue['title']}」（{issue['trash_type']}）を受けた提案です。"
+                        + (f" 現地の状況: {issue['description']}" if issue['description'] else '')
+                    )[:500],
+                })
         if request.method == 'POST':
             if not validate_csrf():
                 return 'CSRFトークンが不正です。', 400
@@ -2580,11 +3012,21 @@ def improvement_proposals_board():
                 LIMIT 50
             ''', (user_id,)).fetchall()
         ]
+        selected_issue_id = (
+            int(raw_issue_id)
+            if request.method == 'GET'
+            and raw_issue_id.isdigit()
+            and len(raw_issue_id) <= 10
+            else None
+        )
         issues = conn.execute('''
             SELECT id, title, location, trash_type, status
             FROM issue_reports
-            ORDER BY id DESC LIMIT 30
-        ''').fetchall()
+            WHERE id IN (
+                SELECT id FROM issue_reports ORDER BY id DESC LIMIT 30
+            ) OR id = ?
+            ORDER BY id DESC
+        ''', (selected_issue_id,)).fetchall()
         location_hotspots = conn.execute('''
             SELECT location, COUNT(*) AS report_count,
                    SUM(CASE WHEN status != 'resolved' THEN 1 ELSE 0 END) AS open_count
@@ -2638,21 +3080,43 @@ def support_improvement_proposal(proposal_id):
         conn.close()
 
 
-def _load_regional_issue_analytics(conn):
+def _haversine_distance_meters(latitude_a, longitude_a, latitude_b, longitude_b):
+    earth_radius_meters = 6_371_000
+    latitude_delta = math.radians(latitude_b - latitude_a)
+    longitude_delta = math.radians(longitude_b - longitude_a)
+    haversine = (
+        math.sin(latitude_delta / 2) ** 2
+        + math.cos(math.radians(latitude_a))
+        * math.cos(math.radians(latitude_b))
+        * math.sin(longitude_delta / 2) ** 2
+    )
+    return 2 * earth_radius_meters * math.asin(min(1.0, math.sqrt(haversine)))
+
+
+def get_location_grid(latitude, longitude, precision=3):
+    if latitude is None or longitude is None:
+        return None
+    lat = round(float(latitude), precision)
+    lon = round(float(longitude), precision)
+    return f'{lat}:{lon}'
+
+
+def _load_regional_issue_analytics(conn, include_personal_info=False):
     issues = conn.execute('''
-        SELECT i.*, u.name AS reporter_name
+        SELECT i.*, CASE WHEN ? THEN u.name ELSE NULL END AS reporter_name
         FROM issue_reports i
         LEFT JOIN users u ON u.id = i.user_id
         ORDER BY CASE i.status WHEN 'open' THEN 0 WHEN 'in_progress' THEN 1 ELSE 2 END,
                  i.id DESC
-    ''').fetchall()
+    ''', (1 if include_personal_info else 0,)).fetchall()
     proposals = conn.execute('''
-        SELECT p.*, u.name AS author_name, i.title AS issue_title
+        SELECT p.*, CASE WHEN ? THEN u.name ELSE NULL END AS author_name,
+               i.title AS issue_title
         FROM improvement_proposals p
         LEFT JOIN users u ON u.id = p.user_id
         LEFT JOIN issue_reports i ON i.id = p.issue_report_id
         ORDER BY p.support_count DESC, p.id DESC
-    ''').fetchall()
+    ''', (1 if include_personal_info else 0,)).fetchall()
     by_trash_type = conn.execute('''
         SELECT trash_type, COUNT(*) AS count,
                COALESCE(SUM(ai_detected_count), 0) AS ai_total
@@ -2664,11 +3128,94 @@ def _load_regional_issue_analytics(conn):
         SELECT location,
                COUNT(*) AS issue_count,
                SUM(CASE WHEN status = 'resolved' THEN 1 ELSE 0 END) AS resolved_count,
-               SUM(CASE WHEN status != 'resolved' THEN 1 ELSE 0 END) AS open_count
+               SUM(CASE WHEN status != 'resolved' THEN 1 ELSE 0 END) AS open_count,
+               SUM(CASE WHEN environment_status = 'improved' THEN 1 ELSE 0 END) AS improved_count,
+               SUM(CASE WHEN environment_status = 'unchanged' THEN 1 ELSE 0 END) AS unchanged_count,
+               SUM(CASE WHEN environment_status = 'worsened' THEN 1 ELSE 0 END) AS worsened_count,
+               SUM(CASE WHEN environment_status = 'recurred' THEN 1 ELSE 0 END) AS recurred_count,
+               SUM(CASE WHEN environment_status = 'unverified' THEN 1 ELSE 0 END) AS unverified_count
         FROM issue_reports
         GROUP BY location
         ORDER BY issue_count DESC, location
     ''').fetchall()
+    recurrence_rows = conn.execute('''
+        WITH ordered_reports AS (
+            SELECT location, created_at, id, status, environment_status,
+                   LAG(created_at) OVER (
+                       PARTITION BY location ORDER BY created_at, id
+                   ) AS previous_reported_at
+            FROM issue_reports
+        ),
+        recurrence_summary AS (
+            SELECT location,
+                   COUNT(*) AS report_count,
+                   COUNT(previous_reported_at) AS repeat_report_count,
+                   ROUND(AVG(
+                       julianday(created_at) - julianday(previous_reported_at)
+                   ), 1) AS average_days_between_reports,
+                   MIN(created_at) AS first_reported_at,
+                   MAX(created_at) AS last_reported_at,
+                   SUM(CASE WHEN environment_status = 'recurred' THEN 1 ELSE 0 END)
+                       AS confirmed_recurrence_count
+            FROM ordered_reports
+            GROUP BY location
+            HAVING COUNT(*) > 1
+        ),
+        latest_reports AS (
+            SELECT location, status AS latest_status,
+                   environment_status AS latest_environment_status,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY location ORDER BY created_at DESC, id DESC
+                   ) AS row_number
+            FROM issue_reports
+        )
+        SELECT summary.*, latest.latest_status,
+               latest.latest_environment_status
+        FROM recurrence_summary summary
+        JOIN latest_reports latest
+          ON latest.location = summary.location AND latest.row_number = 1
+        ORDER BY summary.report_count DESC, summary.last_reported_at DESC
+    ''').fetchall()
+    current_month = datetime.now(timezone.utc).date().replace(day=1)
+    months = []
+    month_cursor = current_month
+    for _ in range(12):
+        months.append(month_cursor.strftime('%Y-%m'))
+        month_cursor = (
+            month_cursor.replace(year=month_cursor.year - 1, month=12)
+            if month_cursor.month == 1
+            else month_cursor.replace(month=month_cursor.month - 1)
+        )
+    time_series_rows = conn.execute('''
+        SELECT strftime('%Y-%m', created_at) AS month,
+               COUNT(*) AS report_count,
+               SUM(CASE WHEN status = 'open' THEN 1 ELSE 0 END) AS open_count,
+               SUM(CASE WHEN status = 'in_progress' THEN 1 ELSE 0 END) AS in_progress_count,
+               SUM(CASE WHEN status = 'resolved' THEN 1 ELSE 0 END) AS resolved_count,
+               SUM(CASE WHEN environment_status = 'improved' THEN 1 ELSE 0 END) AS improved_count,
+               SUM(CASE WHEN environment_status = 'unchanged' THEN 1 ELSE 0 END) AS unchanged_count,
+               SUM(CASE WHEN environment_status = 'worsened' THEN 1 ELSE 0 END) AS worsened_count,
+               SUM(CASE WHEN environment_status = 'recurred' THEN 1 ELSE 0 END) AS recurred_count
+        FROM issue_reports
+        WHERE created_at >= ?
+        GROUP BY strftime('%Y-%m', created_at)
+    ''', (f'{months[-1]}-01 00:00:00',)).fetchall()
+    time_series_by_month = {
+        row['month']: dict(row) for row in time_series_rows if row['month']
+    }
+    issue_time_series = []
+    for month_key in reversed(months):
+        issue_time_series.append(time_series_by_month.get(month_key, {
+            'month': month_key,
+            'report_count': 0,
+            'open_count': 0,
+            'in_progress_count': 0,
+            'resolved_count': 0,
+            'improved_count': 0,
+            'unchanged_count': 0,
+            'worsened_count': 0,
+            'recurred_count': 0,
+        }))
     trash_category_stats = conn.execute('''
         SELECT COALESCE(NULLIF(trash_category, ''), 'ペットボトル・飲料容器') AS category,
                COUNT(*) AS record_count,
@@ -2678,9 +3225,103 @@ def _load_regional_issue_analytics(conn):
         GROUP BY COALESCE(NULLIF(trash_category, ''), 'ペットボトル・飲料容器')
         ORDER BY record_count DESC
     ''').fetchall()
+    registered_bins = conn.execute('''
+        SELECT id, name, lat, lng, waste_types, bin_status
+        FROM trash_bins
+        ORDER BY id
+    ''').fetchall()
+    geocoded_issues = conn.execute('''
+        SELECT id, title, location, trash_type, latitude, longitude
+        FROM issue_reports
+        WHERE latitude IS NOT NULL AND longitude IS NOT NULL
+        ORDER BY id DESC
+    ''').fetchall()
+    issues_without_coordinates = conn.execute('''
+        SELECT COUNT(*) FROM issue_reports
+        WHERE latitude IS NULL OR longitude IS NULL
+    ''').fetchone()[0]
+    proximity_groups = {}
+    issue_bin_proximity = []
+    issues_without_registered_bins = 0
+    distance_bands = (
+        (100, '100m以内'),
+        (300, '100m超〜300m以内'),
+        (float('inf'), '300m超'),
+    )
+    for issue in geocoded_issues:
+        nearest_bin = None
+        nearest_distance = None
+        for bin_row in registered_bins:
+            distance = _haversine_distance_meters(
+                issue['latitude'], issue['longitude'],
+                bin_row['lat'], bin_row['lng'],
+            )
+            if nearest_distance is None or distance < nearest_distance:
+                nearest_bin = bin_row
+                nearest_distance = distance
+        if nearest_bin is None:
+            issues_without_registered_bins += 1
+            continue
+
+        band_label = next(
+            label for upper_bound, label in distance_bands
+            if nearest_distance <= upper_bound
+        )
+        group_key = (issue['trash_type'], band_label)
+        group = proximity_groups.setdefault(group_key, {
+            'trash_type': issue['trash_type'],
+            'distance_band': band_label,
+            'report_count': 0,
+            'distance_total': 0.0,
+        })
+        group['report_count'] += 1
+        group['distance_total'] += nearest_distance
+        if len(issue_bin_proximity) < 20:
+            issue_bin_proximity.append({
+                'title': issue['title'],
+                'location': issue['location'],
+                'trash_type': issue['trash_type'],
+                'nearest_bin_name': nearest_bin['name'],
+                'nearest_bin_distance_m': round(nearest_distance),
+                'nearest_bin_waste_types': nearest_bin['waste_types'],
+                'nearest_bin_status': nearest_bin['bin_status'],
+            })
+    bin_proximity_summary = sorted(
+        (
+            {
+                **group,
+                'average_distance_m': round(
+                    group['distance_total'] / group['report_count']
+                ),
+            }
+            for group in proximity_groups.values()
+        ),
+        key=lambda group: (
+            group['trash_type'],
+            next(
+                index for index, (_, label) in enumerate(distance_bands)
+                if label == group['distance_band']
+            ),
+        ),
+    )
     event_state_changes = conn.execute('''
         SELECT a.id, a.title, a.date, a.participant_role,
-               a.before_state, a.after_state, e.location
+               a.before_state, a.after_state, e.location,
+               CASE
+                   WHEN a.before_state = '' OR a.after_state = ''
+                       THEN '比較未記録'
+                   WHEN a.after_state = 'まだ課題が残っている（追加対応が必要）'
+                       THEN '課題継続・追加対応が必要'
+                   WHEN a.before_state = '比較的きれいだった（予防清掃）'
+                       AND a.after_state = '大幅にきれいになった'
+                       THEN 'きれいな状態を維持（参加者評価）'
+                   WHEN a.before_state = '比較的きれいだった（予防清掃）'
+                       AND a.after_state = 'きれいになったが再発注意'
+                       THEN '再発注意（参加者評価）'
+                   WHEN a.after_state = 'きれいになったが再発注意'
+                       THEN '改善・再発注意（参加者評価）'
+                   ELSE '改善（参加者評価）'
+               END AS comparison_result
         FROM activity_history a
         LEFT JOIN events e ON e.id = a.event_id
         WHERE a.type = 'event'
@@ -2688,13 +3329,30 @@ def _load_regional_issue_analytics(conn):
         ORDER BY a.id DESC
         LIMIT 20
     ''').fetchall()
+    event_state_comparisons = conn.execute('''
+        SELECT e.location, a.before_state, a.after_state,
+               COUNT(*) AS activity_count
+        FROM activity_history a
+        LEFT JOIN events e ON e.id = a.event_id
+        WHERE a.type = 'event'
+          AND a.before_state != '' AND a.after_state != ''
+        GROUP BY e.location, a.before_state, a.after_state
+        ORDER BY activity_count DESC, e.location, a.before_state, a.after_state
+    ''').fetchall()
     return {
         'issues': issues,
         'proposals': proposals,
         'by_trash_type': by_trash_type,
         'by_location': by_location,
+        'location_recurrence': recurrence_rows,
+        'issue_time_series': issue_time_series,
         'trash_category_stats': trash_category_stats,
+        'bin_proximity_summary': bin_proximity_summary,
+        'issue_bin_proximity': issue_bin_proximity,
+        'issues_without_coordinates': issues_without_coordinates,
+        'issues_without_registered_bins': issues_without_registered_bins,
         'event_state_changes': event_state_changes,
+        'event_state_comparisons': event_state_comparisons,
     }
 
 
@@ -2703,7 +3361,7 @@ def _load_regional_issue_analytics(conn):
 def admin_issues():
     conn = get_db()
     try:
-        data = _load_regional_issue_analytics(conn)
+        data = _load_regional_issue_analytics(conn, include_personal_info=True)
         return render_template('admin_issues.html', is_admin=True, **data)
     finally:
         conn.close()
@@ -2714,7 +3372,7 @@ def admin_issues():
 def organizer_issues():
     conn = get_db()
     try:
-        data = _load_regional_issue_analytics(conn)
+        data = _load_regional_issue_analytics(conn, include_personal_info=False)
         return render_template('admin_issues.html', is_admin=False, **data)
     finally:
         conn.close()
@@ -2727,8 +3385,28 @@ def admin_issue_status_update(issue_id):
         return 'CSRFトークンが不正です。', 400
     new_status = (request.form.get('status') or '').strip()
     action_note = (request.form.get('action_note') or '').strip()[:500]
+    requested_environment_status = (
+        request.form.get('environment_status') or ''
+    ).strip()
+    environment_note = (
+        request.form.get('environment_note') or ''
+    ).strip()[:500]
     if new_status not in ('open', 'in_progress', 'resolved'):
         return '不正なステータスです。', 400
+    valid_environment_statuses = {
+        'unverified', 'improved', 'unchanged', 'worsened', 'recurred',
+    }
+    if (
+        requested_environment_status
+        and requested_environment_status not in valid_environment_statuses
+    ):
+        return '不正な環境変化ステータスです。', 400
+    if (
+        requested_environment_status
+        and requested_environment_status != 'unverified'
+        and not environment_note
+    ):
+        return '環境変化の判定には、現地確認の根拠を入力してください。', 400
     conn = get_db()
     try:
         issue = conn.execute(
@@ -2741,18 +3419,90 @@ def admin_issue_status_update(issue_id):
             'in_progress': '対応中・現地確認中',
             'resolved': '解決済み',
         }[new_status]
+        environment_status = (
+            requested_environment_status
+            if requested_environment_status
+            else issue['environment_status']
+        )
+        environment_labels = {
+            'unverified': '未確認',
+            'improved': '改善を確認',
+            'unchanged': '変化なし',
+            'worsened': '悪化',
+            'recurred': '再発',
+        }
         with conn:
+            # ① 更新前の状態を履歴テーブルに保存
+            conn.execute('''
+                INSERT INTO issue_status_history (
+                    issue_id,
+                    previous_status,
+                    new_status,
+                    previous_action_note,
+                    action_note,
+                    previous_environment_status,
+                    new_environment_status,
+                    environment_note,
+                    changed_by
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                issue_id,
+                issue['status'],
+                new_status,
+                issue['action_note'],
+                action_note,
+                issue['environment_status'],
+                environment_status,
+                environment_note,
+                session['user_id'],
+            ))
+
+            # ② 既存の更新処理
             conn.execute('''
                 UPDATE issue_reports
                 SET status = ?, action_note = ?, reviewed_by = ?,
-                    reviewed_at = CURRENT_TIMESTAMP
+                    reviewed_at = CURRENT_TIMESTAMP,
+                    environment_status = ?,
+                    environment_note = CASE
+                        WHEN ? = '' THEN environment_note
+                        WHEN ? = 'unverified' THEN ''
+                        ELSE ?
+                    END,
+                    environment_checked_by = CASE
+                        WHEN ? = '' THEN environment_checked_by
+                        WHEN ? = 'unverified' THEN NULL
+                        ELSE ?
+                    END,
+                    environment_checked_at = CASE
+                        WHEN ? = '' THEN environment_checked_at
+                        WHEN ? = 'unverified' THEN NULL
+                        ELSE CURRENT_TIMESTAMP
+                    END
                 WHERE id = ?
-            ''', (new_status, action_note, session['user_id'], issue_id))
+            ''', (
+                new_status, action_note, session['user_id'],
+                environment_status,
+                requested_environment_status, requested_environment_status, environment_note,
+                requested_environment_status, requested_environment_status, session['user_id'],
+                requested_environment_status, requested_environment_status,
+                issue_id,
+            ))
+
+            # 💡 修正②：同じごみ箱に未解決の「ごみ箱満杯・破損」報告が1件も残っていない場合のみ active に戻す
             if new_status == 'resolved' and issue['trash_type'] == 'ごみ箱満杯・破損':
-                conn.execute('''
-                    UPDATE trash_bins SET bin_status = 'active'
-                    WHERE name = ?
-                ''', (issue['location'],))
+                unresolved_bin_issues = conn.execute('''
+                    SELECT COUNT(*) FROM issue_reports
+                    WHERE location = ?
+                      AND trash_type = 'ごみ箱満杯・破損'
+                      AND status != 'resolved'
+                ''', (issue['location'],)).fetchone()[0]
+                if unresolved_bin_issues == 0:
+                    conn.execute('''
+                        UPDATE trash_bins SET bin_status = 'active'
+                        WHERE name = ? AND bin_status = 'full_reported'
+                    ''', (issue['location'],))
+
+            # ④ 報告者に通知
             conn.execute('''
                 INSERT INTO user_notifications (
                     user_id, notification_type, title, message
@@ -2760,9 +3510,11 @@ def admin_issue_status_update(issue_id):
             ''', (
                 issue['user_id'],
                 f'課題報告の対応状況更新：{issue["title"]}',
-                f'あなたが報告した「{issue["title"]}（{issue["location"]}）」の状況が「{status_label}」に更新されました。'
+                f'あなたが報告した「{issue["title"]}（{issue["location"]}）」の対応状況が「{status_label}」に更新されました。'
+                f'\n地域環境の変化：{environment_labels[environment_status]}'
                 + (f'\n対応メモ：{action_note}' if action_note else ''),
             ))
+
         flash('課題報告の対応状況を更新しました。', 'success')
         return redirect(url_for('admin_issues'))
     finally:
@@ -2776,8 +3528,23 @@ def admin_proposal_status_update(proposal_id):
         return 'CSRFトークンが不正です。', 400
     new_status = (request.form.get('status') or '').strip()
     admin_comment = (request.form.get('admin_comment') or '').strip()[:500]
+    implementation_details = (
+        request.form.get('implementation_details') or ''
+    ).strip()[:1000]
+    implemented_on = (request.form.get('implemented_on') or '').strip()
+    outcome_note = (request.form.get('outcome_note') or '').strip()[:1000]
     if new_status not in ('proposed', 'under_review', 'adopted', 'completed'):
         return '不正なステータスです。', 400
+    if implemented_on:
+        try:
+            if datetime.strptime(implemented_on, '%Y-%m-%d').date().isoformat() != implemented_on:
+                raise ValueError
+        except ValueError:
+            return '実施日はYYYY-MM-DD形式で入力してください。', 400
+    if new_status == 'completed' and not all((
+        implementation_details, implemented_on, outcome_note,
+    )):
+        return '対策完了にするには、実施内容・実施日・実施後の結果をすべて入力してください。', 400
     conn = get_db()
     try:
         proposal = conn.execute(
@@ -2788,9 +3555,24 @@ def admin_proposal_status_update(proposal_id):
         with conn:
             conn.execute('''
                 UPDATE improvement_proposals
-                SET status = ?, admin_comment = ?
+                SET status = ?, admin_comment = ?,
+                    implementation_details = CASE
+                        WHEN ? = '' THEN implementation_details
+                        ELSE ? END,
+                    implemented_on = CASE
+                        WHEN ? = '' THEN implemented_on
+                        ELSE ? END,
+                    outcome_note = CASE
+                        WHEN ? = '' THEN outcome_note
+                        ELSE ? END
                 WHERE id = ?
-            ''', (new_status, admin_comment, proposal_id))
+            ''', (
+                new_status, admin_comment,
+                implementation_details, implementation_details,
+                implemented_on, implemented_on,
+                outcome_note, outcome_note,
+                proposal_id,
+            ))
         flash('改善提案のステータスを更新しました。', 'success')
         return redirect(url_for('admin_issues'))
     finally:
@@ -2805,7 +3587,7 @@ def admin_proposal_status_update(proposal_id):
 def trash_bin():
     conn = get_db()
     try:
-        bins = conn.execute('SELECT * FROM trash_bins ORDER BY name').fetchall()
+        bins = conn.execute('''SELECT * FROM trash_bins WHERE bin_status = 'active' ORDER BY name''').fetchall()
     finally:
         conn.close()
     selected_bin_id = request.args.get('bin_id', type=int)
@@ -2816,6 +3598,7 @@ def trash_bin():
         bins=bins,
         selected_bin_id=selected_bin_id,
         trash_count='',
+        bag_size=TRASH_BAG_SIZE_OPTIONS[0],
     )
 
 def _trash_bin_error(
@@ -2824,7 +3607,7 @@ def _trash_bin_error(
     if bins is None:
         conn = get_db()
         try:
-            bins = conn.execute('SELECT * FROM trash_bins ORDER BY name').fetchall()
+            bins = conn.execute('''SELECT * FROM trash_bins WHERE bin_status = 'active' ORDER BY name''').fetchall()
         finally:
             conn.close()
     if selected_bin_id is None and bins:
@@ -2835,12 +3618,14 @@ def _trash_bin_error(
         bins=bins,
         selected_bin_id=selected_bin_id,
         trash_count=trash_count,
+        bag_size=request.form.get('bag_size') or TRASH_BAG_SIZE_OPTIONS[0],
     ), status
 
 
 def _record_ai_result(
     user_id, result_status, image_path=None, detected_count=None,
     confidence=None, activity_id=None, is_flagged=0, flag_reason=None,
+    detected_classes_json=None, image_sha256=None,
 ):
     conn = get_db()
     try:
@@ -2848,11 +3633,13 @@ def _record_ai_result(
             cursor = conn.execute('''
                 INSERT INTO ai_logs (
                     user_id, activity_id, detected_count, confidence,
-                    image_path, is_flagged, flag_reason, result_status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    image_path, image_sha256, is_flagged, flag_reason, result_status,
+                    detected_classes_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 user_id, activity_id, detected_count, confidence,
-                image_path, is_flagged, flag_reason, result_status,
+                image_path, image_sha256, is_flagged, flag_reason, result_status,
+                detected_classes_json,
             ))
             return cursor.lastrowid
     finally:
@@ -2895,11 +3682,22 @@ def trash_bin_deposit():
         bins = conn.execute('SELECT * FROM trash_bins ORDER BY name').fetchall()
     finally:
         conn.close()
+        
     if selected_bin is None:
         return _trash_bin_error(
             '選択したごみ箱が見つかりません。設置場所を選び直してください。',
             400,
             bins=bins,
+            trash_count=raw_count,
+        )
+        
+    # 💡 優先度①：直接POSTされても、active（利用可能）以外ならここで強制ブロック
+    if selected_bin['bin_status'] != 'active':
+        return _trash_bin_error(
+            'このごみ箱は現在利用できません（満杯または点検中）。別の設置場所を選択してください。',
+            409,
+            bins=bins,
+            selected_bin_id=bin_id,
             trash_count=raw_count,
         )
     bin_location = selected_bin['name']
@@ -2936,6 +3734,15 @@ def trash_bin_deposit():
     if user_declared <= 0 or user_declared > 50:
         return _trash_bin_error(
             'ごみの個数は1〜50の範囲で選択してください。',
+            400, bins, bin_id, raw_count,
+        )
+    bag_size = (
+        request.form.get('bag_size')
+        or TRASH_BAG_SIZE_OPTIONS[0]
+    ).strip()
+    if bag_size not in TRASH_BAG_SIZE_OPTIONS:
+        return _trash_bin_error(
+            '袋サイズの選択内容が不正です。選択し直してください。',
             400, bins, bin_id, raw_count,
         )
 
@@ -3055,6 +3862,10 @@ def trash_bin_deposit():
                     'no_detection',
                     image_path=image_path,
                     detected_count=0,
+                    detected_classes_json=json.dumps(
+                        {'bottle': 0, 'cup': 0}, ensure_ascii=False
+                    ),
+                    image_sha256=image_sha256,
                 )
             except Exception:
                 app.logger.exception("0件のAI判定結果を保存できませんでした。")
@@ -3082,11 +3893,11 @@ def trash_bin_deposit():
         )
         avg_conf = (conf_total / ai_detected) if ai_detected > 0 else 0.0
 
-        # AI検出数を絶対的な獲得ポイントの基準とする（申告改ざん無効化）
+        # AIの検出数は仮ポイントの目安にし、人手確認完了後に確定する。
         final_trash_count = ai_detected
-        points_earned = final_trash_count * 5
+        pending_points = final_trash_count * 5
+        points_earned = 0
         trash_category = (request.form.get('trash_category') or 'ペットボトル・飲料容器').strip()[:100]
-        bag_size = (request.form.get('bag_size') or '手持ち・少量（1〜3個）').strip()[:100]
         detected_classes_json = json.dumps(class_counts, ensure_ascii=False)
 
         conn = get_db()
@@ -3095,12 +3906,14 @@ def trash_bin_deposit():
                 activity_cursor = conn.execute('''
                     INSERT INTO activity_history (
                         user_id, type, title, trash_count, ai_detected_count,
-                        user_declared_count, points_earned, trash_category, bag_size
+                        user_declared_count, points_earned, points_status,
+                        points_pending, trash_category, bag_size
                     )
-                    VALUES (?, "trash_bin", ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, "trash_bin", ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
                 ''', (
-                    user_id, bin_location, final_trash_count, ai_detected,
-                    user_declared, points_earned, trash_category, bag_size,
+                    user_id, bin_location, 0, ai_detected,
+                    user_declared, points_earned, pending_points,
+                    trash_category, bag_size,
                 ))
                 activity_id = activity_cursor.lastrowid
                 
@@ -3117,7 +3930,15 @@ def trash_bin_deposit():
                     detected_classes_json,
                 ))
                 
-                conn.execute('UPDATE users SET total_points = total_points + ? WHERE id = ?', (points_earned, user_id))
+                conn.execute('''
+                    INSERT INTO activity_point_history (
+                        activity_id, user_id, event_type, points_delta,
+                        previous_points, new_points, pending_points, reason
+                    ) VALUES (?, ?, 'pending', 0, 0, 0, ?, ?)
+                ''', (
+                    activity_id, user_id, pending_points,
+                    'AI判定後の人手確認待ち。確認完了までポイントは保留。',
+                ))
                 conn.execute('''
                     INSERT INTO user_notifications (
                         user_id, notification_type, title, message
@@ -3125,8 +3946,8 @@ def trash_bin_deposit():
                 ''', (
                     user_id,
                     'ごみ捨て完了のお知らせ',
-                    f'{bin_location}でごみを{final_trash_count}個記録しました。'
-                    f'{points_earned}ポイントを獲得しました。',
+                    f'{bin_location}でAIがごみを{final_trash_count}個検出しました。'
+                    f'仮ポイント{pending_points}ポイントは管理者のAI画像確認後に確定します。',
                 ))
             app.logger.info(
                 "ごみ画像判定と活動履歴の保存が完了しました。user_id=%s activity_id=%s database=%s",
@@ -3196,7 +4017,11 @@ def trash_bin_deposit():
             raw_count,
         )
 
-    flash(f'画像判定が完了し、活動履歴を保存しました（+{points_earned} pt）。', 'success')
+    flash(
+        f'画像判定が完了し、活動履歴を保存しました。'
+        f'仮ポイント{pending_points} ptは管理者の確認後に確定します。',
+        'success',
+    )
     return redirect(url_for('home'))
 
 # ==========================================
@@ -3213,7 +4038,6 @@ EVENT_PARTICIPANT_ROLES = (
 
 @app.route('/event/reserve/<int:event_id>', methods=['GET', 'POST'])
 @user_required
-@view_mode_required('pc')
 def event_reserve(event_id):
     user_id = session['user_id']
     conn = get_db()
@@ -3386,7 +4210,6 @@ def event_reserve(event_id):
 
 @app.route('/event/reservation/<int:event_id>/complete')
 @user_required
-@view_mode_required('pc')
 def event_reservation_complete(event_id):
     user_id = session['user_id']
     conn = get_db()
@@ -3732,21 +4555,20 @@ def event_complete(event_id):
                 )
 
         bonus_points = event['bonus_points']
+        # 💡 予約時に保存された役割を絶対採用する（フォームからの書き換えを無効化）
         participant_role = (
-            request.form.get('participant_role')
-            or reservation['participant_role']
+            reservation['participant_role']
             or EVENT_PARTICIPANT_ROLES[0]
-        ).strip()[:100]
+        )
         before_state = (request.form.get('before_state') or '').strip()[:100]
         after_state = (request.form.get('after_state') or '').strip()[:100]
         
         with conn:
             reservation_cursor = conn.execute('''
                 UPDATE event_reservations
-                SET status = 'completed', completed_at = CURRENT_TIMESTAMP,
-                    participant_role = ?
+                SET status = 'completed', completed_at = CURRENT_TIMESTAMP
                 WHERE user_id = ? AND event_id = ? AND status = 'reserved'
-            ''', (participant_role, user_id, event_id))
+            ''', (user_id, event_id))
             if reservation_cursor.rowcount != 1:
                 raise sqlite3.IntegrityError('イベント予約状態が変更されています。')
 
@@ -3934,6 +4756,47 @@ def admin_ai_image(filename):
     return send_from_directory(UPLOAD_FOLDER, safe_name)
 
 # ==========================================
+# 課題報告画像の専用表示ルート
+# ==========================================
+@app.route('/issues/image/<int:issue_id>')
+@user_required
+def issue_report_image(issue_id):
+    conn = get_db()
+    try:
+        issue = conn.execute(
+            'SELECT image_path FROM issue_reports WHERE id = ?',
+            (issue_id,)
+        ).fetchone()
+        if issue is None or not issue['image_path']:
+            abort(404)
+        
+        # DBに保存されたパスからファイル名だけを取得
+        filename = os.path.basename(issue['image_path'])
+        
+        # 課題報告画像の命名規則（issue_UUID.拡張子）を検証
+        if not re.fullmatch(
+            r'issue_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-'
+            r'[0-9a-f]{4}-[0-9a-f]{12}\.(?:png|jpg|jpeg|gif|webp)',
+            filename,
+            re.IGNORECASE,
+        ):
+            abort(404)
+            
+        # パストラバーサル対策：保存先をアップロードフォルダ内に限定
+        upload_root = os.path.realpath(UPLOAD_FOLDER)
+        image_file = os.path.realpath(
+            os.path.join(upload_root, filename)
+        )
+        if os.path.commonpath([upload_root, image_file]) != upload_root:
+            abort(404)
+        if not os.path.isfile(image_file):
+            abort(404)
+            
+        return send_from_directory(upload_root, filename)
+    finally:
+        conn.close()
+
+# ==========================================
 # 管理者専用スコープ（認可防衛・統計・ログ監視）
 # ==========================================
 @app.route('/admin/dashboard')
@@ -4045,7 +4908,8 @@ def admin_activity_verifications():
         current_states = load_verification_states(conn)
         items = []
         logs = conn.execute('''
-            SELECT l.*, u.name AS user_name, a.title AS activity_title
+            SELECT l.*, u.name AS user_name, a.title AS activity_title,
+                   a.points_status, a.points_earned, a.points_pending
             FROM ai_logs l
             LEFT JOIN users u ON u.id = l.user_id
             LEFT JOIN activity_history a ON a.id = l.activity_id
@@ -4054,6 +4918,9 @@ def admin_activity_verifications():
         for log in logs:
             verification = get_verification_state(
                 conn, 'ai_result', log, current_states
+            )
+            detected_classes = parse_ai_detected_classes(
+                log['detected_classes_json']
             )
             item = {
                 'target_type': 'ai_result',
@@ -4082,6 +4949,52 @@ def admin_activity_verifications():
                 'result_status': log['result_status'],
                 'detail_url': url_for('admin_ai_log_detail', log_id=log['id']),
                 'activity_title': log['activity_title'],
+                'points_status': log['points_status'],
+                'points_earned': log['points_earned'],
+                'points_pending': log['points_pending'],
+                'detected_bottle_count': (
+                    detected_classes['bottle'] if detected_classes else None
+                ),
+                'detected_cup_count': (
+                    detected_classes['cup'] if detected_classes else None
+                ),
+                'verified_bottle_count': verification['verified_bottle_count'],
+                'verified_cup_count': verification['verified_cup_count'],
+                'reviewer2_id': verification['reviewer2_id'],
+                'verified_bottle_count_2': verification['verified_bottle_count_2'],
+                'verified_cup_count_2': verification['verified_cup_count_2'],
+                'adjudicated_bottle_count': verification['adjudicated_bottle_count'],
+                'adjudicated_cup_count': verification['adjudicated_cup_count'],
+                'adjudicator_id': verification['adjudicator_id'],
+                'review_stage': verification['review_stage'],
+                'consensus_bottle_count': verification['consensus_bottle_count'],
+                'consensus_cup_count': verification['consensus_cup_count'],
+                'review_action': (
+                    'complete'
+                    if verification['review_stage'] in {'agreed', 'adjudicated'}
+                    else (
+                        'first'
+                        if verification['reviewer_id'] is None
+                        or verification['review_stage'] == 'single'
+                        else (
+                            'first_edit'
+                            if verification['reviewer_id'] == session['user_id']
+                            and verification['reviewer2_id'] is None
+                            else (
+                                'second'
+                                if verification['reviewer2_id'] is None
+                                else (
+                                    'adjudicate'
+                                    if session['user_id'] not in {
+                                        verification['reviewer_id'],
+                                        verification['reviewer2_id'],
+                                    }
+                                    else 'adjudication_wait'
+                                )
+                            )
+                        )
+                    )
+                ),
             }
             image_path = log['image_path'] or ''
             image_name = os.path.basename(image_path)
@@ -4167,6 +5080,163 @@ def admin_activity_verifications():
         conn.close()
 
 
+class InsufficientPointBalanceError(Exception):
+    pass
+
+
+def _record_activity_point_transition(
+    conn, activity_id, changed_by, *, pending_points=None, verified_count=None,
+):
+    activity = conn.execute('''
+        SELECT id, user_id, points_earned, points_status, points_pending
+        FROM activity_history
+        WHERE id = ?
+    ''', (activity_id,)).fetchone()
+    if activity is None:
+        return
+
+    previous_points = int(activity['points_earned'] or 0)
+    current_status = activity['points_status']
+    current_pending = int(activity['points_pending'] or 0)
+
+    if verified_count is None:
+        pending_points = max(0, int(pending_points or 0))
+        if current_status == 'pending' and current_pending == pending_points:
+            return
+        points_delta = -previous_points
+        if points_delta < 0:
+            user = conn.execute(
+                'SELECT total_points FROM users WHERE id = ?',
+                (activity['user_id'],),
+            ).fetchone()
+            if user is None:
+                raise RuntimeError('ポイント対象ユーザーが見つかりません。')
+            if user['total_points'] < -points_delta:
+                raise InsufficientPointBalanceError(
+                    '保有ポイントが不足しているため、確認を未完了に戻せません。'
+                    '利用済みポイントを確認してから再試行してください。'
+                )
+            conn.execute('''
+                UPDATE users SET total_points = total_points + ?
+                WHERE id = ? AND total_points >= ?
+            ''', (points_delta, activity['user_id'], -points_delta))
+        conn.execute('''
+            UPDATE activity_history
+            SET trash_count = 0, points_earned = 0,
+                points_status = 'pending', points_pending = ?
+            WHERE id = ?
+        ''', (pending_points, activity_id))
+        conn.execute('''
+            INSERT INTO activity_point_history (
+                activity_id, user_id, event_type, points_delta,
+                previous_points, new_points, pending_points, reason, changed_by
+            ) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)
+        ''', (
+            activity_id, activity['user_id'],
+            'reversed' if previous_points else 'pending',
+            points_delta, previous_points, pending_points,
+            '再確認のためポイントを保留に戻しました。',
+            changed_by,
+        ))
+        if previous_points:
+            conn.execute('''
+                INSERT INTO user_notifications (
+                    user_id, notification_type, title, message
+                ) VALUES (?, 'activity_completed', ?, ?)
+            ''', (
+                activity['user_id'],
+                'ポイント再確認のお知らせ',
+                'AI判定の再確認に伴い、確定済みポイントを一時保留に戻しました。',
+            ))
+        return
+
+    verified_count = max(0, int(verified_count))
+    new_points = verified_count * 5
+    points_delta = new_points - previous_points
+    if (
+        current_pending == 0
+        and new_points == previous_points
+        and (
+            current_status == 'awarded' and new_points > 0
+            or current_status == 'cancelled' and new_points == 0
+        )
+    ):
+        return
+    if points_delta < 0:
+        user = conn.execute(
+            'SELECT total_points FROM users WHERE id = ?',
+            (activity['user_id'],),
+        ).fetchone()
+        if user is None:
+            raise RuntimeError('ポイント対象ユーザーが見つかりません。')
+        if user['total_points'] < -points_delta:
+            raise InsufficientPointBalanceError(
+                '保有ポイントが不足しているため、確認結果を反映できません。'
+                '利用済みポイントを確認してから再試行してください。'
+            )
+        conn.execute('''
+            UPDATE users SET total_points = total_points + ?
+            WHERE id = ? AND total_points >= ?
+        ''', (points_delta, activity['user_id'], -points_delta))
+    elif points_delta > 0:
+        conn.execute(
+            'UPDATE users SET total_points = total_points + ? WHERE id = ?',
+            (points_delta, activity['user_id']),
+        )
+
+    event_type = (
+        'cancelled' if new_points == 0
+        else ('awarded' if previous_points == 0 else 'adjusted')
+    )
+    conn.execute('''
+        UPDATE activity_history
+        SET trash_count = ?, points_earned = ?,
+            points_status = ?, points_pending = 0
+        WHERE id = ?
+    ''', (
+        verified_count, new_points, 'awarded' if new_points else 'cancelled',
+        activity_id,
+    ))
+    reason = (
+        '二名一致または第三者裁定の確認件数に基づきポイントを確定しました。'
+        if points_delta >= 0
+        else '確認件数の修正に基づきポイントを調整しました。'
+    )
+    conn.execute('''
+        INSERT INTO activity_point_history (
+            activity_id, user_id, event_type, points_delta,
+            previous_points, new_points, pending_points, reason, changed_by
+        ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)
+    ''', (
+        activity_id, activity['user_id'], event_type, points_delta,
+        previous_points, new_points, reason, changed_by,
+    ))
+    if event_type == 'adjusted':
+        notification_message = (
+            f'AI画像の再確認によりポイントを調整しました。'
+            f'{previous_points}ポイントから{new_points}ポイントになりました。'
+        )
+    elif previous_points and new_points == 0:
+        notification_message = (
+            f'AI画像の再確認により、確定済みの{previous_points}ポイントを取り消しました。'
+        )
+    elif new_points:
+        notification_message = (
+            f'AI画像の確認が完了しました。{new_points}ポイントが確定しました。'
+        )
+    else:
+        notification_message = 'AI画像の確認が完了しました。確定ポイントはありません。'
+    conn.execute('''
+        INSERT INTO user_notifications (
+            user_id, notification_type, title, message
+        ) VALUES (?, 'activity_completed', ?, ?)
+    ''', (
+        activity['user_id'],
+        'AI判定確認完了のお知らせ',
+        notification_message,
+    ))
+
+
 @app.route(
     '/admin/activity-verifications/<target_type>/<int:target_id>',
     methods=['POST'],
@@ -4180,9 +5250,19 @@ def update_activity_verification(target_type, target_id):
 
     status = request.form.get('status', '')
     review_note = request.form.get('review_note', '').strip()
+    verified_bottle_count = None
+    verified_cup_count = None
+    current_verification = None
+    linked_activity_id = None
+    reverification_required = False
+    review_stage = 'single'
     if status not in ('unreviewed', 'confirmed', 'correction_required'):
         return '不正な確認状態です。', 400
-    if status == 'correction_required' and not review_note:
+    if (
+        target_type != 'ai_result'
+        and status == 'correction_required'
+        and not review_note
+    ):
         return '要修正にする場合は理由を入力してください。', 400
     if len(review_note) > 1000:
         return '確認メモは1000文字以内で入力してください。', 400
@@ -4197,8 +5277,30 @@ def update_activity_verification(target_type, target_id):
                 abort(404)
             if target['result_status'] == 'failed':
                 return '判定に失敗したAIログは確認できません。', 409
+            if status != 'unreviewed':
+                try:
+                    verified_bottle_count = int(
+                        request.form.get('verified_bottle_count', '')
+                    )
+                    verified_cup_count = int(
+                        request.form.get('verified_cup_count', '')
+                    )
+                except (TypeError, ValueError):
+                    return '画像で確認したボトル数・カップ数を入力してください。', 400
+                if (
+                    verified_bottle_count < 0
+                    or verified_cup_count < 0
+                    or verified_bottle_count > 1000
+                    or verified_cup_count > 1000
+                ):
+                    return '確認件数は0〜1000の整数で入力してください。', 400
             ai_log_id = target_id
             activity_id = None
+            linked_activity_id = target['activity_id']
+            current_verification = conn.execute('''
+                SELECT * FROM activity_verifications
+                WHERE target_type = 'ai_result' AND ai_log_id = ?
+            ''', (target_id,)).fetchone()
         else:
             target = conn.execute(
                 'SELECT * FROM activity_history WHERE id = ?', (target_id,)
@@ -4227,36 +5329,212 @@ def update_activity_verification(target_type, target_id):
             activity_id = target_id
 
         fingerprint = verification_fingerprint(target_type, target)
-        with conn:
-            conn.execute('''
-                DELETE FROM activity_verifications
-                WHERE target_type = ?
-                    AND ((ai_log_id = ?) OR (activity_id = ?))
-            ''', (target_type, ai_log_id, activity_id))
-            if status != 'unreviewed':
+        with immediate_transaction(conn):
+            if target_type == 'ai_result':
+                current_verification = conn.execute('''
+                    SELECT * FROM activity_verifications
+                    WHERE target_type = 'ai_result' AND ai_log_id = ?
+                ''', (ai_log_id,)).fetchone()
+                actor_id = session['user_id']
+                if (
+                    current_verification is not None
+                    and current_verification['source_fingerprint'] != fingerprint
+                ):
+                    reverification_required = True
+                    conn.execute('''
+                        DELETE FROM activity_verifications
+                        WHERE target_type = 'ai_result' AND ai_log_id = ?
+                    ''', (ai_log_id,))
+                    current_verification = None
+                if status == 'unreviewed':
+                    conn.execute('''
+                        DELETE FROM activity_verifications
+                        WHERE target_type = 'ai_result' AND ai_log_id = ?
+                    ''', (ai_log_id,))
+                    review_stage = 'reset'
+                elif current_verification is None:
+                    conn.execute('''
+                        INSERT INTO activity_verifications (
+                            target_type, activity_id, ai_log_id, status,
+                            reviewer_id, review_note, source_fingerprint,
+                            verified_bottle_count, verified_cup_count
+                        ) VALUES ('ai_result', NULL, ?, 'confirmed', ?, ?, ?, ?, ?)
+                    ''', (
+                        ai_log_id, actor_id, review_note or None, fingerprint,
+                        verified_bottle_count, verified_cup_count,
+                    ))
+                    review_stage = 'first_review'
+                elif current_verification['reviewer2_id'] is None:
+                    if actor_id == current_verification['reviewer_id']:
+                        conn.execute('''
+                            UPDATE activity_verifications
+                            SET status = 'confirmed', review_note = ?,
+                                source_fingerprint = ?,
+                                verified_bottle_count = ?,
+                                verified_cup_count = ?
+                            WHERE target_type = 'ai_result' AND ai_log_id = ?
+                        ''', (
+                            review_note or None, fingerprint,
+                            verified_bottle_count, verified_cup_count, ai_log_id,
+                        ))
+                        review_stage = 'first_review'
+                    else:
+                        counts_agree = (
+                            verified_bottle_count
+                                == current_verification['verified_bottle_count']
+                            and verified_cup_count
+                                == current_verification['verified_cup_count']
+                        )
+                        review_note = (
+                            review_note
+                            or (
+                                '' if counts_agree
+                                else '二重確認で不一致。第三者の裁定が必要です。'
+                            )
+                        )
+                        conn.execute('''
+                            UPDATE activity_verifications
+                            SET status = ?, reviewer2_id = ?,
+                                second_reviewed_at = CURRENT_TIMESTAMP,
+                                review_note = ?, verified_bottle_count_2 = ?,
+                                verified_cup_count_2 = ?
+                            WHERE target_type = 'ai_result' AND ai_log_id = ?
+                        ''', (
+                            'confirmed' if counts_agree else 'correction_required',
+                            actor_id, review_note or None,
+                            verified_bottle_count, verified_cup_count, ai_log_id,
+                        ))
+                        review_stage = (
+                            'second_agrees' if counts_agree
+                            else 'disagreement'
+                        )
+                elif (
+                    current_verification['adjudicated_bottle_count'] is None
+                    and (
+                        current_verification['verified_bottle_count']
+                            != current_verification['verified_bottle_count_2']
+                        or current_verification['verified_cup_count']
+                            != current_verification['verified_cup_count_2']
+                    )
+                ):
+                    if actor_id in {
+                        current_verification['reviewer_id'],
+                        current_verification['reviewer2_id'],
+                    }:
+                        return '意見不一致の裁定は、一次・二次確認者以外の管理者が行ってください。', 409
+                    conn.execute('''
+                        UPDATE activity_verifications
+                        SET status = 'confirmed',
+                            adjudicated_bottle_count = ?,
+                            adjudicated_cup_count = ?,
+                            adjudicator_id = ?,
+                            adjudicated_at = CURRENT_TIMESTAMP,
+                            review_note = ?
+                        WHERE target_type = 'ai_result' AND ai_log_id = ?
+                    ''', (
+                        verified_bottle_count, verified_cup_count, actor_id,
+                        review_note or '第三者管理者が件数を裁定しました。',
+                        ai_log_id,
+                    ))
+                    review_stage = 'adjudication'
+                else:
+                    return 'この画像の二重確認は完了しています。新しい判定が必要な場合は未確認に戻してください。', 409
+            else:
                 conn.execute('''
-                    INSERT INTO activity_verifications (
+                    DELETE FROM activity_verifications
+                    WHERE target_type = ?
+                        AND ((ai_log_id = ?) OR (activity_id = ?))
+                ''', (target_type, ai_log_id, activity_id))
+                if status != 'unreviewed':
+                    conn.execute('''
+                        INSERT INTO activity_verifications (
+                            target_type, activity_id, ai_log_id, status,
+                            reviewer_id, review_note, source_fingerprint
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ''', (
                         target_type, activity_id, ai_log_id, status,
-                        reviewer_id, review_note, source_fingerprint
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                ''', (
-                    target_type, activity_id, ai_log_id, status,
-                    session['user_id'], review_note or None, fingerprint,
-                ))
+                        session['user_id'], review_note or None, fingerprint,
+                    ))
+                review_stage = status
+            if target_type == 'ai_result' and status != 'unreviewed':
+                current_verification = conn.execute('''
+                    SELECT * FROM activity_verifications
+                    WHERE target_type = 'ai_result' AND ai_log_id = ?
+                ''', (ai_log_id,)).fetchone()
+            if target_type == 'ai_result' and linked_activity_id is not None:
+                if review_stage in ('second_agrees', 'adjudication'):
+                    if review_stage == 'second_agrees':
+                        confirmed_count = (
+                            current_verification['verified_bottle_count']
+                            + current_verification['verified_cup_count']
+                        )
+                    else:
+                        confirmed_count = (
+                            current_verification['adjudicated_bottle_count']
+                            + current_verification['adjudicated_cup_count']
+                        )
+                    _record_activity_point_transition(
+                        conn,
+                        linked_activity_id,
+                        session['user_id'],
+                        verified_count=confirmed_count,
+                    )
+                elif review_stage == 'reset' or reverification_required:
+                    _record_activity_point_transition(
+                        conn,
+                        linked_activity_id,
+                        session['user_id'],
+                        pending_points=target['detected_count'] * 5,
+                    )
+            if target_type == 'ai_result' and status != 'unreviewed':
+                current_verification = conn.execute('''
+                    SELECT * FROM activity_verifications
+                    WHERE target_type = 'ai_result' AND ai_log_id = ?
+                ''', (ai_log_id,)).fetchone()
+                history_values = (
+                    current_verification['verified_bottle_count'],
+                    current_verification['verified_cup_count'],
+                    current_verification['verified_bottle_count_2'],
+                    current_verification['verified_cup_count_2'],
+                    current_verification['adjudicated_bottle_count'],
+                    current_verification['adjudicated_cup_count'],
+                )
+                history_status = current_verification['status']
+                history_note = current_verification['review_note']
+            else:
+                history_values = (None, None, None, None, None, None)
+                history_status = status
+                history_note = review_note or None
             conn.execute('''
                 INSERT INTO activity_verification_history (
                     target_type, activity_id, ai_log_id, status,
-                    reviewer_id, review_note, source_fingerprint
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    reviewer_id, review_note, source_fingerprint,
+                    verified_bottle_count, verified_cup_count,
+                    verified_bottle_count_2, verified_cup_count_2,
+                    adjudicated_bottle_count, adjudicated_cup_count,
+                    review_stage
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
-                target_type, activity_id, ai_log_id, status,
-                session['user_id'], review_note or None, fingerprint,
+                target_type, activity_id, ai_log_id, history_status,
+                session['user_id'], history_note, fingerprint,
+                *history_values, review_stage,
             ))
-        flash('確認状態を更新しました。', 'success')
+        flash(
+            {
+                'first_review': '一次確認を保存しました。ポイントは保留中です。別の管理者による二次確認が必要です。',
+                'second_agrees': '二名の確認が一致し、確認件数に基づくポイントを確定しました。',
+                'disagreement': '二名の確認が一致しません。第三者管理者による裁定待ちです。',
+                'adjudication': '第三者管理者による裁定を保存し、確認件数に基づくポイントを確定しました。',
+                'reset': 'AI判定を未確認に戻し、ポイントを保留にしました。',
+            }.get(review_stage, '確認状態を更新しました。'),
+            'success',
+        )
         return redirect(
             url_for('admin_activity_verifications')
             + f'#{target_type}-{target_id}'
         )
+    except InsufficientPointBalanceError as error:
+        return str(error), 409
     finally:
         conn.close()
 
@@ -4286,6 +5564,76 @@ def admin_activity_report():
                     >= date('now', '+9 hours', 'start of month', '-11 months')
                 AND date(COALESCE(a.date, l.created_at), '+9 hours') <= date('now', '+9 hours')
         ''').fetchall()
+        ai_reference_summary = {
+            'reviewed_count': 0,
+            'double_review_count': 0,
+            'inter_rater_agreement_count': 0,
+            'adjudicated_count': 0,
+            'count_sample_count': 0,
+            'count_exact_count': 0,
+            'count_over_total': 0,
+            'count_under_total': 0,
+            'detected_count_total': 0,
+            'verified_count_total': 0,
+            'class_counts': {
+                'bottle': {
+                    'sample_count': 0, 'exact_count': 0,
+                    'over_count': 0, 'under_count': 0,
+                    'detected_total': 0, 'verified_total': 0,
+                },
+                'cup': {
+                    'sample_count': 0, 'exact_count': 0,
+                    'over_count': 0, 'under_count': 0,
+                    'detected_total': 0, 'verified_total': 0,
+                },
+            },
+            'confidence_bands': [
+                {
+                    'label': '25%以上 - 50%未満',
+                    'minimum': 0.25,
+                    'maximum': 0.5,
+                    'sample_count': 0,
+                    'exact_count': 0,
+                    'class_counts': {
+                        class_name: {'sample_count': 0, 'exact_count': 0}
+                        for class_name in ('bottle', 'cup')
+                    },
+                },
+                {
+                    'label': '50%以上 - 75%未満',
+                    'minimum': 0.5,
+                    'maximum': 0.75,
+                    'sample_count': 0,
+                    'exact_count': 0,
+                    'class_counts': {
+                        class_name: {'sample_count': 0, 'exact_count': 0}
+                        for class_name in ('bottle', 'cup')
+                    },
+                },
+                {
+                    'label': '75%以上 - 90%未満',
+                    'minimum': 0.75,
+                    'maximum': 0.9,
+                    'sample_count': 0,
+                    'exact_count': 0,
+                    'class_counts': {
+                        class_name: {'sample_count': 0, 'exact_count': 0}
+                        for class_name in ('bottle', 'cup')
+                    },
+                },
+                {
+                    'label': '90%以上 - 100%以下',
+                    'minimum': 0.9,
+                    'maximum': 1.0,
+                    'sample_count': 0,
+                    'exact_count': 0,
+                    'class_counts': {
+                        class_name: {'sample_count': 0, 'exact_count': 0}
+                        for class_name in ('bottle', 'cup')
+                    },
+                },
+            ],
+        }
         for log in recent_ai_logs:
             verification = get_verification_state(
                 conn, 'ai_result', log, current_states
@@ -4296,6 +5644,174 @@ def admin_activity_report():
                 else verification['status']
             )
             verification_summary['ai_result'][review_status] += 1
+            if (
+                verification['stale']
+            ):
+                continue
+            if (
+                verification['reviewer2_id'] is not None
+                and verification['verified_bottle_count'] is not None
+                and verification['verified_cup_count'] is not None
+                and verification['verified_bottle_count_2'] is not None
+                and verification['verified_cup_count_2'] is not None
+            ):
+                ai_reference_summary['double_review_count'] += 1
+                if (
+                    verification['verified_bottle_count']
+                        == verification['verified_bottle_count_2']
+                    and verification['verified_cup_count']
+                        == verification['verified_cup_count_2']
+                ):
+                    ai_reference_summary['inter_rater_agreement_count'] += 1
+            if verification['adjudicated_at']:
+                ai_reference_summary['adjudicated_count'] += 1
+            if (
+                verification['consensus_bottle_count'] is None
+                or verification['consensus_cup_count'] is None
+            ):
+                continue
+            ai_reference_summary['reviewed_count'] += 1
+            detected_classes = parse_ai_detected_classes(
+                log['detected_classes_json']
+            )
+            if detected_classes is not None:
+                for class_name in ('bottle', 'cup'):
+                    class_summary = ai_reference_summary['class_counts'][class_name]
+                    class_summary['sample_count'] += 1
+                    detected_count = detected_classes[class_name]
+                    verified_count = verification[
+                        f'consensus_{class_name}_count'
+                    ]
+                    class_summary['detected_total'] += detected_count
+                    class_summary['verified_total'] += verified_count
+                    if detected_count == verified_count:
+                        class_summary['exact_count'] += 1
+                    elif detected_count > verified_count:
+                        class_summary['over_count'] += (
+                            detected_count - verified_count
+                        )
+                    else:
+                        class_summary['under_count'] += (
+                            verified_count - detected_count
+                        )
+            if log['detected_count'] is not None:
+                actual_total = (
+                    verification['consensus_bottle_count']
+                    + verification['consensus_cup_count']
+                )
+                detected_total = log['detected_count']
+                ai_reference_summary['count_sample_count'] += 1
+                ai_reference_summary['detected_count_total'] += detected_total
+                ai_reference_summary['verified_count_total'] += actual_total
+                if detected_total > actual_total:
+                    ai_reference_summary['count_over_total'] += (
+                        detected_total - actual_total
+                    )
+                elif detected_total < actual_total:
+                    ai_reference_summary['count_under_total'] += (
+                        actual_total - detected_total
+                    )
+                else:
+                    ai_reference_summary['count_exact_count'] += 1
+                confidence = log['confidence']
+                if (
+                    detected_total > 0
+                    and confidence is not None
+                    and math.isfinite(confidence)
+                    and 0.25 <= confidence <= 1.0
+                ):
+                    for band in ai_reference_summary['confidence_bands']:
+                        if (
+                            confidence >= band['minimum']
+                            and (
+                                confidence < band['maximum']
+                                or band['maximum'] == 1.0
+                                and confidence == 1.0
+                            )
+                        ):
+                            band['sample_count'] += 1
+                            if detected_total == actual_total:
+                                band['exact_count'] += 1
+                            if detected_classes is not None:
+                                for class_name in ('bottle', 'cup'):
+                                    class_band = band['class_counts'][class_name]
+                                    class_band['sample_count'] += 1
+                                    if detected_classes[class_name] == verification[
+                                        f'consensus_{class_name}_count'
+                                    ]:
+                                        class_band['exact_count'] += 1
+                            break
+        for band in ai_reference_summary['confidence_bands']:
+            band['exact_rate'] = (
+                round(band['exact_count'] * 100 / band['sample_count'], 1)
+                if band['sample_count'] else None
+            )
+            for class_band in band['class_counts'].values():
+                class_band['exact_rate'] = (
+                    round(
+                        class_band['exact_count'] * 100
+                        / class_band['sample_count'],
+                        1,
+                    )
+                    if class_band['sample_count'] else None
+                )
+        ai_reference_summary['count_exact_rate'] = (
+            round(
+                ai_reference_summary['count_exact_count'] * 100
+                / ai_reference_summary['count_sample_count'],
+                1,
+            )
+            if ai_reference_summary['count_sample_count'] else None
+        )
+        ai_reference_summary['inter_rater_agreement_rate'] = (
+            round(
+                ai_reference_summary['inter_rater_agreement_count'] * 100
+                / ai_reference_summary['double_review_count'],
+                1,
+            )
+            if ai_reference_summary['double_review_count'] else None
+        )
+        ai_reference_summary['count_over_rate'] = (
+            round(
+                ai_reference_summary['count_over_total'] * 100
+                / ai_reference_summary['detected_count_total'],
+                1,
+            )
+            if ai_reference_summary['detected_count_total'] else None
+        )
+        ai_reference_summary['count_under_rate'] = (
+            round(
+                ai_reference_summary['count_under_total'] * 100
+                / ai_reference_summary['verified_count_total'],
+                1,
+            )
+            if ai_reference_summary['verified_count_total'] else None
+        )
+        for class_summary in ai_reference_summary['class_counts'].values():
+            class_summary['exact_rate'] = (
+                round(
+                    class_summary['exact_count'] * 100
+                    / class_summary['sample_count'],
+                    1,
+                )
+                if class_summary['sample_count'] else None
+            )
+            class_summary['over_rate'] = (
+                round(
+                    class_summary['over_count'] * 100
+                    / class_summary['detected_total'],
+                    1,
+                )
+                if class_summary['detected_total'] else None
+            )
+            class_summary['under_rate'] = (
+                round(
+                    class_summary['under_count'] * 100
+                    / class_summary['verified_total'],
+                    1,
+                )
+                if class_summary['verified_total'] else None
+            )
 
         recent_declarations = conn.execute('''
             SELECT * FROM activity_history
@@ -4541,6 +6057,29 @@ def admin_activity_report():
             GROUP BY COALESCE(NULLIF(title, ''), '場所未登録')
             ORDER BY record_count DESC, location
         ''').fetchall()
+        bag_size_counts = {
+            row['bag_size']: row['record_count']
+            for row in conn.execute('''
+                SELECT bag_size, COUNT(*) AS record_count
+                FROM activity_history
+                WHERE type = 'trash_bin'
+                    AND date(date, '+9 hours')
+                        >= date('now', '+9 hours', 'start of month', '-11 months')
+                    AND date(date, '+9 hours') <= date('now', '+9 hours')
+                GROUP BY bag_size
+            ''').fetchall()
+        }
+        bag_size_summary = [
+            {
+                'label': bag_size,
+                'record_count': bag_size_counts.pop(bag_size, 0),
+            }
+            for bag_size in TRASH_BAG_SIZE_OPTIONS
+        ]
+        bag_size_summary.append({
+            'label': '未分類・旧記録',
+            'record_count': sum(bag_size_counts.values()),
+        })
         return render_template(
             'admin_activity_report.html',
             summary=summary,
@@ -4548,9 +6087,129 @@ def admin_activity_report():
             event_activity=event_activity,
             trash_locations=trash_locations,
             verification_summary=verification_summary,
+            ai_reference_summary=ai_reference_summary,
             unclassified_declaration_count=unclassified_declaration_count,
             ai_result_summary=ai_result_summary,
             ai_result_monthly=ai_result_monthly,
+            bag_size_summary=bag_size_summary,
+        )
+    finally:
+        conn.close()
+
+
+@app.route('/admin/ai/verified-dataset.zip')
+@admin_required
+def admin_ai_verified_dataset_export():
+    conn = get_db()
+    try:
+        current_states = load_verification_states(conn)
+        logs = conn.execute('''
+            SELECT * FROM ai_logs
+            WHERE result_status IN ('detected', 'no_detection')
+                AND image_path IS NOT NULL
+            ORDER BY created_at, id
+        ''').fetchall()
+        export_rows = []
+        skipped_missing_image = 0
+        skipped_legacy_labels = 0
+        upload_root = os.path.realpath(UPLOAD_FOLDER)
+
+        for log in logs:
+            verification = get_verification_state(
+                conn, 'ai_result', log, current_states
+            )
+            if (
+                verification['stale']
+                or verification['review_stage'] != 'agreed'
+                or verification['status'] != 'confirmed'
+                or verification['reviewer_id'] == verification['reviewer2_id']
+                or verification['consensus_bottle_count'] is None
+                or verification['consensus_cup_count'] is None
+            ):
+                continue
+            try:
+                detected_classes = parse_ai_detected_classes(
+                    log['detected_classes_json']
+                )
+            except ValueError:
+                skipped_legacy_labels += 1
+                continue
+            if detected_classes is None:
+                skipped_legacy_labels += 1
+                continue
+
+            image_name = log['image_path']
+            if (
+                not re.fullmatch(
+                    r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(?:png|jpg|jpeg|gif|webp)',
+                    image_name,
+                    re.IGNORECASE,
+                )
+                or not allowed_file(image_name)
+            ):
+                skipped_missing_image += 1
+                continue
+            image_path = os.path.realpath(os.path.join(upload_root, image_name))
+            if (
+                os.path.dirname(image_path) != upload_root
+                or not os.path.isfile(image_path)
+            ):
+                skipped_missing_image += 1
+                continue
+
+            export_rows.append({
+                'image': f'images/{image_name}',
+                'ai_counts': detected_classes,
+                'verified_counts': {
+                    'bottle': verification['consensus_bottle_count'],
+                    'cup': verification['consensus_cup_count'],
+                },
+                'label_source': 'independent_two_reviewer_agreement',
+            })
+
+        if not export_rows:
+            return (
+                '二名の独立確認が一致し、画像ファイルが利用可能な学習用データはありません。',
+                404,
+            )
+
+        archive_buffer = io.BytesIO()
+        with zipfile.ZipFile(
+            archive_buffer, mode='w', compression=zipfile.ZIP_DEFLATED
+        ) as archive:
+            archive.writestr(
+                'manifest.jsonl',
+                ''.join(
+                    json.dumps(row, ensure_ascii=False) + '\n'
+                    for row in export_rows
+                ),
+            )
+            archive.writestr(
+                'README.txt',
+                (
+                    'CleanStep 目視確認済み画像データ\n'
+                    f'画像数: {len(export_rows)}\n'
+                    '各画像のラベルは二名の独立した確認が完全一致したものだけです。\n'
+                    'manifest.jsonl は画像単位のボトル・カップ個数ラベルです。\n'
+                    '物体位置の矩形アノテーションは含まれないため、YOLO物体検出の学習データとしてはそのまま使用できません。\n'
+                    '二名の意見が一致せず第三者が裁定したデータは、この高一致データセットには含めていません。\n'
+                    '画像には撮影場所や人物などの情報が含まれる可能性があります。アクセス管理された環境で保管し、外部共有前に内容と権利を確認してください。\n'
+                    f'旧形式の種類別ラベル不足で除外: {skipped_legacy_labels} 件\n'
+                    f'画像ファイル不足・形式不正で除外: {skipped_missing_image} 件\n'
+                ),
+            )
+            for row in export_rows:
+                image_name = row['image'].split('/', 1)[1]
+                archive.write(
+                    os.path.join(upload_root, image_name),
+                    arcname=row['image'],
+                )
+        archive_buffer.seek(0)
+        return send_file(
+            archive_buffer,
+            mimetype='application/zip',
+            as_attachment=True,
+            download_name='cleanstep-verified-ai-dataset.zip',
         )
     finally:
         conn.close()
@@ -5054,13 +6713,21 @@ def admin_event_edit(event_id):
             submitted_values, error_msg = _validated_event_form()
             event_values.update(submitted_values)
             if not error_msg:
-                with conn:
-                    conn.execute('''
+                with immediate_transaction(conn):
+                    cursor = conn.execute('''
                         UPDATE events
                         SET name = ?, location = ?, latitude = ?, longitude = ?,
                             datetime = ?, bonus_points = ?, category = ?,
                             purpose_issue = ?
                         WHERE id = ?
+                          AND NOT EXISTS (
+                              SELECT 1 FROM activity_history a
+                              WHERE a.event_id = events.id
+                          )
+                          AND NOT EXISTS (
+                              SELECT 1 FROM event_reservations r
+                              WHERE r.event_id = events.id AND r.status = 'reserved'
+                          )
                     ''', (
                         event_values['name'], event_values['location'],
                         event_values['latitude'], event_values['longitude'],
@@ -5068,6 +6735,8 @@ def admin_event_edit(event_id):
                         event_values['category'], event_values.get('purpose_issue', ''),
                         event_id,
                     ))
+                    if cursor.rowcount != 1:
+                        return '予約または参加記録があるイベントは編集できません。', 409
                 return redirect(url_for('admin_events'))
         return render_template(
             'edit_event.html', event=event_values, error_msg=error_msg,
@@ -5208,7 +6877,7 @@ def organizer_apply():
             WHERE user_id = ? ORDER BY id DESC LIMIT 1
         ''', (user_id,)).fetchone()
         if application is None:
-            flash('団体利用の申請は、今後アカウント登録時に受け付けます。', 'info')
+            flash('団体利用を希望する場合は、団体アカウントで新規登録してください。管理者の審査後に利用できます。', 'info')
             return redirect(url_for('home'))
         if application['status'] == 'approved':
             return redirect(url_for('organizer_dashboard'))
@@ -5256,6 +6925,16 @@ def review_organizer_application(application_id):
             ''', (application_id,)).fetchone()
             if not application:
                 return '申請が見つからないか、すでに審査済みです。', 409
+
+            if decision == 'approved':
+                existing_org_id = get_user_organization_id(
+                    conn, application['user_id']
+                )
+                if existing_org_id is not None:
+                    return (
+                        '申請者はすでに別の承認済み団体に所属しているため承認できません。',
+                        409,
+                    )
 
             cursor = conn.execute('''
                 UPDATE organizer_applications
@@ -5571,7 +7250,7 @@ def organizer_event_participants(event_id):
                         ELSE r.status END AS status,
                    r.reserved_at,
                    COALESCE(r.completed_at, a.date) AS completed_at,
-                   u.name, u.email, a.points_earned
+                   u.name, NULL AS email, a.points_earned
             FROM (
                 SELECT user_id FROM event_reservations WHERE event_id = ?
                 UNION
@@ -5791,8 +7470,8 @@ def organizer_event_edit(event_id):
             )
             event_values.update(submitted_values)
             if not error_msg:
-                with conn:
-                    conn.execute('''
+                with immediate_transaction(conn):
+                    cursor = conn.execute('''
                         UPDATE events
                         SET name = ?, location = ?, latitude = ?, longitude = ?,
                             datetime = ?, bonus_points = ?, capacity = ?,
@@ -5800,6 +7479,15 @@ def organizer_event_edit(event_id):
                             review_status = 'pending', review_comment = NULL,
                             reviewed_by = NULL, reviewed_at = NULL
                         WHERE id = ? AND organization_id = ? AND status = 'open'
+                          AND review_status IN ('pending', 'changes_requested', 'approved')
+                          AND NOT EXISTS (
+                              SELECT 1 FROM activity_history a
+                              WHERE a.event_id = events.id
+                          )
+                          AND NOT EXISTS (
+                              SELECT 1 FROM event_reservations r
+                              WHERE r.event_id = events.id AND r.status = 'reserved'
+                          )
                     ''', (
                         event_values['name'], event_values['location'],
                         event_values['latitude'], event_values['longitude'],
@@ -5810,6 +7498,11 @@ def organizer_event_edit(event_id):
                         event_values.get('purpose_issue', ''),
                         event_id, organization_id,
                     ))
+                    if cursor.rowcount != 1:
+                        return (
+                            '予約または参加記録があるイベント、または審査中・中止済みのイベントは編集できません。',
+                            409,
+                        )
                 return redirect(url_for('organizer_events'))
         return render_template(
             'organizer_event_form.html', event=event_values,

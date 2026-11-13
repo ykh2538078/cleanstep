@@ -53,8 +53,20 @@
         <div class="card"><div class="number">{{ summary.points_earned or 0 }}</div><div class="label">獲得ポイント</div></div>
     </div>
     <p class="data-note">
-        AI検出数とユーザー申告数は別々に集計しています。「画像ログ上の検出数合計」は活動に紐付く成功ログごとの検出数を足した値です。同じ対象が複数画像に写る場合は重複する可能性があるため、実回収数やユニーク個数ではありません。判定ログが紐付かない過去の活動記録は、AIの検出数を確認できません。袋の大きさ・充填率・重量は記録していないため、個数を回収量に換算していません。
+        ごみ箱への持ち込みはAI検出数×5ポイント、イベント清掃はイベントごとに設定された参加ボーナスです。袋サイズと自己申告個数はポイントに使いません。AI検出数と自己申告数は別々に集計しています。「画像ログ上の検出数合計」は活動に紐付く成功ログごとの検出数を足した値です。同じ対象が複数画像に写る場合は重複する可能性があるため、実回収数やユニーク個数ではありません。袋サイズは自己申告の参考カテゴリで、重量・実容量・充填率を計測したものではありません。
     </p>
+    <section>
+        <h2>申告された袋サイズの分布（直近12か月）</h2>
+        <p class="note">ごみ箱への持ち込み時に選択された参考量の内訳です。袋サイズや申告件数は確認・計測済みの回収量ではなく、ポイント計算にも使用しません。</p>
+        <table id="bag-size-summary">
+            <thead><tr><th>申告された目安</th><th>記録数</th></tr></thead>
+            <tbody>
+                {% for row in bag_size_summary %}
+                    <tr><td>{{ row.label }}</td><td>{{ row.record_count }} 件</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </section>
     <section>
         <h2>データ確認状況</h2>
         <p class="note">直近12か月の記録について、値の出所ごとに確認状態を集計しています。AIは画像判定ログ単位、申告・GPSは活動内の項目単位です。GPSの確認は記録値・計測方法の確認であり、実際の移動を保証するものではありません。</p>
@@ -75,6 +87,64 @@
         </table>
         <p class="note">申告数が0以下または未入力の記録 {{ unclassified_declaration_count }} 件は、0件の申告と未入力を区別できないため確認対象の集計から除外しています。</p>
         <p><a href="{{ url_for('admin_activity_verifications') }}">活動データの確認状態を管理する</a></p>
+    </section>
+    <section>
+        <h2>画像ごとの目視確認によるAI判定比較（直近12か月）</h2>
+        <p class="note">二名がAI判定値を見ずに画像を独立確認し、結果が一致した記録と、第三者が裁定した記録だけを比較しています。過検出・見逃しはAI件数と合意・裁定件数の差です。確認者間一致率は独立して記録し、精度指標とは分けて表示します。写真に写った量の判定であり、袋の実重量やポイント計算とは別です。</p>
+        <p>二名一致または第三者裁定 {{ ai_reference_summary.reviewed_count }} 件 · 総検出数を比較できるログ {{ ai_reference_summary.count_sample_count }} 件</p>
+        <p>二重確認 {{ ai_reference_summary.double_review_count }} 件 · 確認者間の完全一致 {{ ai_reference_summary.inter_rater_agreement_count }} 件（{% if ai_reference_summary.inter_rater_agreement_rate is not none %}{{ ai_reference_summary.inter_rater_agreement_rate }}%{% else %}データなし{% endif %}） · 第三者裁定 {{ ai_reference_summary.adjudicated_count }} 件</p>
+        <p><a href="{{ url_for('admin_ai_verified_dataset_export') }}">二名一致した画像・ラベルをZIPで出力</a></p>
+        <table>
+            <thead><tr><th>比較対象</th><th>完全一致</th><th>完全一致率</th><th>過検出数</th><th>見逃し数</th><th>過検出率 / 見逃し率</th><th>比較サンプル</th></tr></thead>
+            <tbody>
+                <tr>
+                    <td>検出数合計</td>
+                    <td>{{ ai_reference_summary.count_exact_count }} 件</td>
+                    <td>{% if ai_reference_summary.count_exact_rate is not none %}{{ ai_reference_summary.count_exact_rate }}%{% else %}データなし{% endif %}</td>
+                    <td>{{ ai_reference_summary.count_over_total }} 個</td>
+                    <td>{{ ai_reference_summary.count_under_total }} 個</td>
+                    <td>
+                        {% if ai_reference_summary.count_over_rate is not none %}{{ ai_reference_summary.count_over_rate }}%{% else %}—{% endif %}
+                        /
+                        {% if ai_reference_summary.count_under_rate is not none %}{{ ai_reference_summary.count_under_rate }}%{% else %}—{% endif %}
+                    </td>
+                    <td>{{ ai_reference_summary.count_sample_count }} 件</td>
+                </tr>
+                {% for class_name, label in [('bottle', 'ボトル'), ('cup', 'カップ')] %}
+                    {% set row = ai_reference_summary.class_counts[class_name] %}
+                    <tr>
+                        <td>{{ label }}検出数</td>
+                        <td>{{ row.exact_count }} 件</td>
+                        <td>{% if row.exact_rate is not none %}{{ row.exact_rate }}%{% else %}データなし{% endif %}</td>
+                        <td>{{ row.over_count }} 個</td>
+                        <td>{{ row.under_count }} 個</td>
+                        <td>
+                            {% if row.over_rate is not none %}{{ row.over_rate }}%{% else %}—{% endif %}
+                            /
+                            {% if row.under_rate is not none %}{{ row.under_rate }}%{% else %}—{% endif %}
+                        </td>
+                        <td>{{ row.sample_count }} 件</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        <h3>AI信頼度帯ごとの個数完全一致率</h3>
+        <p class="note">二名一致または第三者裁定のある画像のうち、検出数が1件以上で信頼度を記録したログを集計しています。種類別一致率はAIの種類別個数ログがある画像だけを対象にします。信頼度は検出物ごとのスコア平均であり、正解確率として校正された値ではありません。判定保留の基準を決める前に、帯ごとの傾向を確認するための参考値です。</p>
+        <table id="ai-confidence-accuracy">
+            <thead><tr><th>記録された信頼度</th><th>全体の一致率<br>一致 / サンプル</th><th>ボトル一致率<br>一致 / サンプル</th><th>カップ一致率<br>一致 / サンプル</th></tr></thead>
+            <tbody>
+                {% for band in ai_reference_summary.confidence_bands %}
+                    <tr>
+                        <td>{{ band.label }}</td>
+                        <td>{{ band.exact_count }} / {{ band.sample_count }} 件（{% if band.exact_rate is not none %}{{ band.exact_rate }}%{% else %}データなし{% endif %}）</td>
+                        {% for class_name in ['bottle', 'cup'] %}
+                            {% set class_band = band.class_counts[class_name] %}
+                            <td>{{ class_band.exact_count }} / {{ class_band.sample_count }} 件（{% if class_band.exact_rate is not none %}{{ class_band.exact_rate }}%{% else %}データなし{% endif %}）</td>
+                        {% endfor %}
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
     </section>
     <section>
         <h2>月別実績</h2>

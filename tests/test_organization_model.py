@@ -7,6 +7,8 @@ import shutil
 import tempfile
 import threading
 import unittest
+import uuid
+import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from io import BytesIO, StringIO
@@ -131,6 +133,10 @@ if _previous_disable_ai is None:
     os.environ.pop("CLEANSTEP_DISABLE_AI", None)
 else:
     os.environ["CLEANSTEP_DISABLE_AI"] = _previous_disable_ai
+if _previous_demo_mode is None:
+    os.environ.pop("CLEANSTEP_DEMO_MODE", None)
+else:
+    os.environ["CLEANSTEP_DEMO_MODE"] = _previous_demo_mode
 
 
 @contextmanager
@@ -157,9 +163,27 @@ class OrganizationModelTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cleanstep.app.config.update(TESTING=True)
+        # init_db() が作成した初期DBを全テスト共通の読み取り元として保持する。
+        # 各テストはこのDBの独立コピーを使い、固定IDのデータや変更が他テストへ漏れないようにする。
+        cls._baseline_database = cleanstep.DATABASE
 
     def setUp(self):
+        self._original_database = cleanstep.DATABASE
+        self._test_database_dir = tempfile.TemporaryDirectory(prefix='cleanstep-test-')
+        self._test_database_path = Path(self._test_database_dir.name) / 'test.db'
+
+        # SQLite backup APIで整合性を保った状態のDBコピーを作る。
+        with sqlite3.connect(self._baseline_database) as source_conn:
+            with sqlite3.connect(self._test_database_path) as target_conn:
+                source_conn.backup(target_conn)
+
+        cleanstep.DATABASE = str(self._test_database_path)
         self.client = cleanstep.app.test_client()
+
+    def tearDown(self):
+        # テスト内で一時的にDATABASEを差し替えた場合も必ず元へ戻す。
+        cleanstep.DATABASE = self._original_database
+        self._test_database_dir.cleanup()
 
     def _csrf_token(self, path='/login'):
         self.client.get(path)
@@ -201,6 +225,8 @@ class OrganizationModelTests(unittest.TestCase):
                 title TEXT,
                 trash_count INTEGER,
                 points_earned INTEGER,
+                points_status TEXT DEFAULT 'awarded',
+                points_pending INTEGER DEFAULT 0,
                 date TEXT
             )
         ''')
@@ -236,6 +262,91 @@ class OrganizationModelTests(unittest.TestCase):
             'name': '公園・河川清掃', 'count': 1,
         }])
         self.assertEqual(report["activity_trends"][-1]["month"], current_month.strftime('%Y-%m'))
+        conn.close()
+
+    def test_user_report_tracks_reflection_behavior_indicators_by_month(self):
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        current_month = datetime.now(cleanstep.JST).date().replace(day=5)
+        previous_month = (
+            current_month.replace(day=1) - timedelta(days=1)
+        ).replace(day=5)
+        conn.executescript('''
+            CREATE TABLE events (
+                id INTEGER PRIMARY KEY,
+                name TEXT,
+                location TEXT,
+                reward_details TEXT,
+                category TEXT
+            );
+            CREATE TABLE activity_history (
+                id INTEGER PRIMARY KEY,
+                user_id INTEGER,
+                event_id INTEGER,
+                type TEXT,
+                title TEXT,
+                trash_count INTEGER DEFAULT 0,
+                points_earned INTEGER DEFAULT 0,
+                points_status TEXT NOT NULL DEFAULT 'awarded',
+                points_pending INTEGER NOT NULL DEFAULT 0,
+                date TEXT
+            );
+            CREATE TABLE event_feedback (
+                id INTEGER PRIMARY KEY,
+                activity_id INTEGER,
+                user_id INTEGER,
+                event_id INTEGER,
+                satisfaction INTEGER,
+                comment TEXT,
+                noticed_issue TEXT,
+                suspected_cause TEXT,
+                collaboration_note TEXT,
+                next_improvement TEXT,
+                action_status TEXT,
+                action_note TEXT,
+                submitted_at TEXT
+            );
+        ''')
+        conn.executemany('''
+            INSERT INTO events (id, name, location, category)
+            VALUES (?, ?, '中央公園', '公園・河川清掃')
+        ''', [(1, '先月の清掃'), (2, '今月の清掃')])
+        conn.executemany('''
+            INSERT INTO activity_history (
+                id, user_id, event_id, type, title, date
+            ) VALUES (?, 1, ?, 'event', ?, ?)
+        ''', [
+            (1, 1, '先月の清掃', previous_month.isoformat()),
+            (2, 2, '今月の清掃', current_month.isoformat()),
+        ])
+        conn.executemany('''
+            INSERT INTO event_feedback (
+                id, activity_id, user_id, event_id, satisfaction, comment,
+                noticed_issue, suspected_cause, collaboration_note,
+                next_improvement, action_status, action_note, submitted_at
+            ) VALUES (?, ?, ?, ?, 5, '', ?, ?, ?, ?, 'pending', '',
+                      ? || ' 12:00:00')
+        ''', [
+            (1, 1, 1, 1, 'ごみの散乱', '通行量が多い', '', '', previous_month.isoformat()),
+            (2, 2, 1, 2, '吸い殻', '', '分別を案内した', '表示を増やす', current_month.isoformat()),
+            (3, 3, 2, 2, '別ユーザーの記録', '他ユーザーの原因', '', '', current_month.isoformat()),
+        ])
+
+        report = cleanstep.generate_user_report(conn, 1)
+
+        previous_trend, current_trend = report['reflection_behavior_trends'][-2:]
+        self.assertEqual(previous_trend['month'], previous_month.strftime('%Y-%m'))
+        self.assertEqual(previous_trend['responses'], 1)
+        self.assertEqual(previous_trend['issue_noticing'], 1)
+        self.assertEqual(previous_trend['cause_analysis'], 1)
+        self.assertEqual(previous_trend['collaboration'], 0)
+        self.assertEqual(previous_trend['next_improvement'], 0)
+        self.assertEqual(current_trend['month'], current_month.strftime('%Y-%m'))
+        self.assertEqual(current_trend['responses'], 1)
+        self.assertEqual(current_trend['issue_noticing'], 1)
+        self.assertEqual(current_trend['cause_analysis'], 0)
+        self.assertEqual(current_trend['collaboration'], 1)
+        self.assertEqual(current_trend['next_improvement'], 1)
         conn.close()
 
     def test_event_category_suggestions_use_event_details(self):
@@ -442,6 +553,9 @@ class OrganizationModelTests(unittest.TestCase):
                 self.assertEqual(activity['calories'], 55)
                 self.assertEqual(activity['detox_duration'], 10)
                 self.assertEqual(activity['gps_measured'], 0)
+                self.assertEqual(activity['points_earned'], 40)
+                self.assertEqual(activity['points_status'], 'awarded')
+                self.assertEqual(activity['points_pending'], 0)
                 self.assertEqual(count_and_points['count'], 1)
                 self.assertEqual(count_and_points['points'], 40)
                 self.assertIsNotNone(unique_event_index)
@@ -639,7 +753,7 @@ class OrganizationModelTests(unittest.TestCase):
             finally:
                 cleanstep.DATABASE = previous_database
 
-    def test_duplicate_successful_image_does_not_award_points_twice(self):
+    def test_duplicate_successful_image_remains_pending_until_review(self):
         bin_name = 'Duplicate Image Test Bin'
         with database_connection() as conn:
             conn.execute('''
@@ -689,6 +803,7 @@ class OrganizationModelTests(unittest.TestCase):
                                 'csrf_token': 'test-csrf-token',
                                 'bin_id': str(bin_id),
                                 'trash_count': '2',
+                                'bag_size': '大袋（45L相当）',
                                 'garbage_image': (image_upload(), 'same.png'),
                             },
                             content_type='multipart/form-data',
@@ -731,14 +846,25 @@ class OrganizationModelTests(unittest.TestCase):
                             SELECT COUNT(*) FROM activity_history
                             WHERE id = ?
                         ''', (activity_id,)).fetchone()[0]
+                        recorded_activity = conn.execute('''
+                                SELECT points_earned, points_status, points_pending,
+                                       bag_size
+                                FROM activity_history WHERE id = ?
+                            ''', (activity_id,)).fetchone()
                     self.assertEqual(original['detected_count'], 2)
                     self.assertRegex(original['image_sha256'], r'^[0-9a-f]{64}$')
-                    self.assertEqual(user_points, before_user['total_points'] + 10)
+                    self.assertEqual(user_points, before_user['total_points'])
                     self.assertEqual(
                         other_user_points, before_other_user['total_points']
                     )
                     self.assertEqual(attempts, 1)
                     self.assertEqual(activity_count, 1)
+                    self.assertEqual(recorded_activity['points_earned'], 0)
+                    self.assertEqual(recorded_activity['points_status'], 'pending')
+                    self.assertEqual(recorded_activity['points_pending'], 10)
+                    self.assertEqual(
+                        recorded_activity['bag_size'], '大袋（45L相当）'
+                    )
 
                     self._login_as(2, 'admin')
                     response = self.client.get('/admin/ai/flags')
@@ -758,6 +884,10 @@ class OrganizationModelTests(unittest.TestCase):
                         )
                     if activity_id is not None:
                         conn.execute(
+                            'DELETE FROM activity_point_history WHERE activity_id = ?',
+                            (activity_id,),
+                        )
+                        conn.execute(
                             'DELETE FROM activity_history WHERE id = ?',
                             (activity_id,),
                         )
@@ -769,7 +899,195 @@ class OrganizationModelTests(unittest.TestCase):
                         'DELETE FROM trash_bins WHERE id = ?', (bin_id,)
                     )
 
-    def test_concurrent_duplicate_images_award_points_once(self):
+    def test_ai_points_wait_for_verification_and_reversals_are_audited(self):
+        created_activity_id = None
+        created_log_id = None
+        with database_connection() as conn:
+            original_roles = {
+                row['id']: row['role']
+                for row in conn.execute(
+                    'SELECT id, role FROM users WHERE id IN (3, 4)'
+                )
+            }
+            conn.execute("UPDATE users SET role = 'admin' WHERE id IN (3, 4)")
+            starting_points = conn.execute(
+                'SELECT total_points FROM users WHERE id = 1'
+            ).fetchone()['total_points']
+            activity_cursor = conn.execute('''
+                INSERT INTO activity_history (
+                    user_id, type, title, trash_count, ai_detected_count,
+                    points_earned, points_status, points_pending
+                ) VALUES (1, 'trash_bin', 'Point hold verification test',
+                          2, 2, 0, 'pending', 10)
+            ''')
+            created_activity_id = activity_cursor.lastrowid
+            log_cursor = conn.execute('''
+                INSERT INTO ai_logs (
+                    user_id, activity_id, detected_count, confidence,
+                    image_path, detected_classes_json
+                ) VALUES (1, ?, 2, 0.9, 'point-hold-test.jpg', ?)
+            ''', (
+                created_activity_id,
+                json.dumps({'bottle': 2, 'cup': 0}),
+            ))
+            created_log_id = log_cursor.lastrowid
+            conn.execute('''
+                INSERT INTO activity_point_history (
+                    activity_id, user_id, event_type, pending_points, reason
+                ) VALUES (?, 1, 'pending', 10, 'Test pending point record')
+            ''', (created_activity_id,))
+
+        def submit_review(reviewer_id, bottle_count=None, cup_count=None):
+            self._login_as(reviewer_id, 'admin')
+            data = {'csrf_token': 'test-csrf-token', 'status': 'confirmed'}
+            if bottle_count is not None:
+                data['verified_bottle_count'] = str(bottle_count)
+                data['verified_cup_count'] = str(cup_count)
+            return self.client.post(
+                f'/admin/activity-verifications/ai_result/{created_log_id}',
+                data=data,
+            )
+
+        try:
+            self.assertEqual(submit_review(2, 1, 0).status_code, 302)
+            self.assertEqual(submit_review(3, 2, 0).status_code, 302)
+            with database_connection() as conn:
+                held = conn.execute('''
+                    SELECT a.points_earned, a.points_status, a.points_pending,
+                           u.total_points
+                    FROM activity_history a
+                    JOIN users u ON u.id = a.user_id
+                    WHERE a.id = ?
+                ''', (created_activity_id,)).fetchone()
+            self.assertEqual(held['points_earned'], 0)
+            self.assertEqual(held['points_status'], 'pending')
+            self.assertEqual(held['points_pending'], 10)
+            self.assertEqual(held['total_points'], starting_points)
+
+            adjudication = submit_review(4, 3, 0)
+            self.assertEqual(adjudication.status_code, 302)
+            self.assertEqual(submit_review(4, 3, 0).status_code, 409)
+            with database_connection() as conn:
+                awarded = conn.execute('''
+                    SELECT a.points_earned, a.points_status, a.points_pending,
+                           u.total_points
+                    FROM activity_history a
+                    JOIN users u ON u.id = a.user_id
+                    WHERE a.id = ?
+                ''', (created_activity_id,)).fetchone()
+                adjudication_state = conn.execute('''
+                    SELECT adjudicated_bottle_count, adjudicated_cup_count
+                    FROM activity_verifications WHERE ai_log_id = ?
+                ''', (created_log_id,)).fetchone()
+            self.assertEqual(
+                tuple(adjudication_state), (3, 0),
+                msg=adjudication.get_data(as_text=True),
+            )
+            self.assertEqual(awarded['points_earned'], 15)
+            self.assertEqual(awarded['points_status'], 'awarded')
+            self.assertEqual(awarded['points_pending'], 0)
+            self.assertEqual(awarded['total_points'], starting_points + 15)
+
+            self._login_as(2, 'admin')
+            reset = self.client.post(
+                f'/admin/activity-verifications/ai_result/{created_log_id}',
+                data={
+                    'csrf_token': 'test-csrf-token',
+                    'status': 'unreviewed',
+                },
+            )
+            self.assertEqual(reset.status_code, 302)
+            self.assertEqual(submit_review(2, 1, 0).status_code, 302)
+            self.assertEqual(submit_review(3, 1, 0).status_code, 302)
+            with database_connection() as conn:
+                corrected = conn.execute('''
+                    SELECT a.points_earned, a.points_status, a.points_pending,
+                           u.total_points
+                    FROM activity_history a
+                    JOIN users u ON u.id = a.user_id
+                    WHERE a.id = ?
+                ''', (created_activity_id,)).fetchone()
+                point_events = conn.execute('''
+                    SELECT event_type, points_delta
+                    FROM activity_point_history
+                    WHERE activity_id = ? ORDER BY id
+                ''', (created_activity_id,)).fetchall()
+            self.assertEqual(corrected['points_earned'], 5)
+            self.assertEqual(corrected['points_status'], 'awarded')
+            self.assertEqual(corrected['points_pending'], 0)
+            self.assertEqual(corrected['total_points'], starting_points + 5)
+
+            self._login_as(2, 'admin')
+            reset = self.client.post(
+                f'/admin/activity-verifications/ai_result/{created_log_id}',
+                data={
+                    'csrf_token': 'test-csrf-token',
+                    'status': 'unreviewed',
+                },
+            )
+            self.assertEqual(reset.status_code, 302)
+            self.assertEqual(submit_review(2, 0, 0).status_code, 302)
+            self.assertEqual(submit_review(3, 0, 0).status_code, 302)
+            with database_connection() as conn:
+                cancelled = conn.execute('''
+                    SELECT a.points_earned, a.points_status, a.points_pending,
+                           u.total_points
+                    FROM activity_history a
+                    JOIN users u ON u.id = a.user_id
+                    WHERE a.id = ?
+                ''', (created_activity_id,)).fetchone()
+                point_events = conn.execute('''
+                    SELECT event_type, points_delta
+                    FROM activity_point_history
+                    WHERE activity_id = ? ORDER BY id
+                ''', (created_activity_id,)).fetchall()
+            self.assertEqual(cancelled['points_earned'], 0)
+            self.assertEqual(cancelled['points_status'], 'cancelled')
+            self.assertEqual(cancelled['points_pending'], 0)
+            self.assertEqual(cancelled['total_points'], starting_points)
+            self.assertEqual(
+                [(row['event_type'], row['points_delta']) for row in point_events],
+                [
+                    ('pending', 0),
+                    ('awarded', 15),
+                    ('reversed', -15),
+                    ('awarded', 5),
+                    ('reversed', -5),
+                    ('cancelled', 0),
+                ],
+            )
+        finally:
+            with database_connection() as conn:
+                conn.execute(
+                    'DELETE FROM activity_verification_history WHERE ai_log_id = ?',
+                    (created_log_id,),
+                )
+                conn.execute(
+                    'DELETE FROM activity_verifications WHERE ai_log_id = ?',
+                    (created_log_id,),
+                )
+                conn.execute(
+                    'DELETE FROM ai_logs WHERE id = ?', (created_log_id,)
+                )
+                if created_activity_id is not None:
+                    conn.execute(
+                        'DELETE FROM activity_point_history WHERE activity_id = ?',
+                        (created_activity_id,),
+                    )
+                    conn.execute(
+                        'DELETE FROM activity_history WHERE id = ?',
+                        (created_activity_id,),
+                    )
+                conn.execute(
+                    'UPDATE users SET total_points = ? WHERE id = ?',
+                    (starting_points, 1),
+                )
+                for user_id, role in original_roles.items():
+                    conn.execute(
+                        'UPDATE users SET role = ? WHERE id = ?', (role, user_id)
+                    )
+
+    def test_concurrent_duplicate_images_create_one_pending_activity(self):
         bin_name = 'Concurrent Duplicate Image Test Bin'
         with database_connection() as conn:
             conn.execute('''
@@ -867,7 +1185,7 @@ class OrganizationModelTests(unittest.TestCase):
                     ''', (image_sha256,)).fetchone()[0]
                 self.assertEqual(len(log_ids), 1)
                 self.assertEqual(len(activity_ids), 1)
-                self.assertEqual(total_points, starting_points + 10)
+                self.assertEqual(total_points, starting_points)
                 self.assertEqual(attempts, 1)
             finally:
                 with database_connection() as conn:
@@ -884,6 +1202,10 @@ class OrganizationModelTests(unittest.TestCase):
                     if activity_ids:
                         placeholders = ','.join('?' for _ in activity_ids)
                         conn.execute(
+                            f'DELETE FROM activity_point_history WHERE activity_id IN ({placeholders})',
+                            activity_ids,
+                        )
+                        conn.execute(
                             f'DELETE FROM activity_history WHERE id IN ({placeholders})',
                             activity_ids,
                         )
@@ -898,9 +1220,9 @@ class OrganizationModelTests(unittest.TestCase):
                         'DELETE FROM trash_bins WHERE id = ?', (bin_id,)
                     )
 
-    def test_failed_points_update_rolls_back_activity_and_ai_log(self):
+    def test_failed_point_history_write_rolls_back_activity_and_ai_log(self):
         bin_name = 'Rollback Deposit Test Bin'
-        trigger_name = 'test_abort_user_points_update'
+        trigger_name = 'test_abort_point_history_insert'
         with database_connection() as conn:
             conn.execute('''
                 INSERT INTO trash_bins (name, description, lat, lng)
@@ -919,10 +1241,10 @@ class OrganizationModelTests(unittest.TestCase):
             ''').fetchone()
             conn.execute(f'''
                 CREATE TRIGGER {trigger_name}
-                BEFORE UPDATE OF total_points ON users
-                WHEN NEW.id = 1
+                BEFORE INSERT ON activity_point_history
+                WHEN NEW.user_id = 1
                 BEGIN
-                    SELECT RAISE(ABORT, 'simulated points write failure');
+                    SELECT RAISE(ABORT, 'simulated point history failure');
                 END
             ''')
 
@@ -1011,9 +1333,9 @@ class OrganizationModelTests(unittest.TestCase):
             def predict(self, *args, **kwargs):
                 raise RuntimeError('simulated inference failure')
 
-        def image_upload():
+        def image_upload(color='white'):
             image = BytesIO()
-            Image.new('RGB', (2, 2), color='white').save(image, format='PNG')
+            Image.new('RGB', (2, 2), color=color).save(image, format='PNG')
             image.seek(0)
             return image
 
@@ -1036,6 +1358,19 @@ class OrganizationModelTests(unittest.TestCase):
                         )
                     self.assertEqual(response.status_code, 422)
 
+                    with patch.object(cleanstep, 'get_model', return_value=NoDetectionModel()):
+                        response = self.client.post(
+                            '/trash-bin/deposit',
+                            data={
+                                'csrf_token': 'test-csrf-token',
+                                'bin_id': str(bin_id),
+                                'trash_count': '1',
+                                'garbage_image': (image_upload(), 'duplicate.png'),
+                            },
+                            content_type='multipart/form-data',
+                        )
+                    self.assertEqual(response.status_code, 409)
+
                     with patch.object(cleanstep, 'get_model', return_value=FailedModel()):
                         response = self.client.post(
                             '/trash-bin/deposit',
@@ -1043,7 +1378,7 @@ class OrganizationModelTests(unittest.TestCase):
                                 'csrf_token': 'test-csrf-token',
                                 'bin_id': str(bin_id),
                                 'trash_count': '1',
-                                'garbage_image': (image_upload(), 'failed.png'),
+                                'garbage_image': (image_upload(color='black'), 'failed.png'),
                             },
                             content_type='multipart/form-data',
                         )
@@ -1051,8 +1386,9 @@ class OrganizationModelTests(unittest.TestCase):
 
                     with database_connection() as conn:
                         logs = conn.execute('''
-                            SELECT id, result_status, detected_count, activity_id
-                            FROM ai_logs WHERE user_id = 1
+                            SELECT id, result_status, detected_count, activity_id,
+                                       detected_classes_json, image_sha256
+                                FROM ai_logs WHERE user_id = 1
                             ORDER BY id DESC LIMIT 2
                         ''').fetchall()
                         log_ids = [log['id'] for log in logs]
@@ -1065,8 +1401,14 @@ class OrganizationModelTests(unittest.TestCase):
                     by_status = {log['result_status']: log for log in logs}
                     self.assertEqual(set(by_status), {'no_detection', 'failed'})
                     self.assertEqual(by_status['no_detection']['detected_count'], 0)
+                    self.assertEqual(
+                        json.loads(by_status['no_detection']['detected_classes_json']),
+                        {'bottle': 0, 'cup': 0},
+                    )
+                    self.assertTrue(by_status['no_detection']['image_sha256'])
                     self.assertIsNone(by_status['no_detection']['activity_id'])
                     self.assertIsNone(by_status['failed']['detected_count'])
+                    self.assertIsNone(by_status['failed']['image_sha256'])
                     self.assertIsNone(by_status['failed']['activity_id'])
                     self.assertEqual(after_user['total_points'], before_user['total_points'])
                     self.assertEqual(
@@ -1096,6 +1438,21 @@ class OrganizationModelTests(unittest.TestCase):
                 with database_connection() as conn:
                     if log_ids:
                         placeholders = ','.join('?' for _ in log_ids)
+                        conn.execute(
+                            f'DELETE FROM activity_verification_history '
+                            f'WHERE ai_log_id IN ({placeholders})',
+                            log_ids,
+                        )
+                        conn.execute(
+                            f'DELETE FROM activity_verifications '
+                            f'WHERE ai_log_id IN ({placeholders})',
+                            log_ids,
+                        )
+                        conn.execute(
+                            f'DELETE FROM ai_duplicate_attempts '
+                            f'WHERE original_ai_log_id IN ({placeholders})',
+                            log_ids,
+                        )
                         conn.execute(
                             f'DELETE FROM ai_logs WHERE id IN ({placeholders})',
                             log_ids,
@@ -1382,6 +1739,60 @@ class OrganizationModelTests(unittest.TestCase):
                     ('new-user@example.test',),
                 )
 
+    def test_organization_registration_submits_application_for_admin_review(self):
+        email = 'signup-organization@example.test'
+        csrf_token = self._csrf_token('/register')
+        try:
+            response = self.client.post(
+                '/register',
+                data={
+                    'csrf_token': csrf_token,
+                    'name': '団体担当者',
+                    'email': email,
+                    'password': 'validpass123',
+                    'account_type': 'organization',
+                    'organization_name': '地域清掃チーム',
+                    'organization_contact': 'contact@example.test',
+                    'organization_purpose': '地域清掃イベントの企画・運営',
+                },
+            )
+            self.assertEqual(response.status_code, 302)
+            self.assertEqual(response.location, '/login')
+
+            with database_connection() as conn:
+                application = conn.execute('''
+                    SELECT u.id AS user_id, u.role, a.organization_name,
+                           a.contact, a.purpose, a.status
+                    FROM users u
+                    JOIN organizer_applications a ON a.user_id = u.id
+                    WHERE u.email = ?
+                ''', (email,)).fetchone()
+            self.assertIsNotNone(application)
+            self.assertEqual(application['role'], 'user')
+            self.assertEqual(application['organization_name'], '地域清掃チーム')
+            self.assertEqual(application['contact'], 'contact@example.test')
+            self.assertEqual(
+                application['purpose'], '地域清掃イベントの企画・運営'
+            )
+            self.assertEqual(application['status'], 'pending')
+
+            self._login_as(2, 'admin')
+            review_page = self.client.get('/admin/organizer-applications')
+            self.assertEqual(review_page.status_code, 200)
+            self.assertIn('地域清掃チーム', review_page.get_data(as_text=True))
+            self.assertIn('審査待ち', review_page.get_data(as_text=True))
+        finally:
+            with database_connection() as conn:
+                user = conn.execute(
+                    'SELECT id FROM users WHERE email = ?', (email,)
+                ).fetchone()
+                if user:
+                    conn.execute(
+                        'DELETE FROM organizer_applications WHERE user_id = ?',
+                        (user['id'],),
+                    )
+                    conn.execute('DELETE FROM users WHERE id = ?', (user['id'],))
+
     def test_admin_role_is_rechecked_against_database(self):
         self._login_as(2, 'admin')
         with database_connection() as conn:
@@ -1526,7 +1937,15 @@ class OrganizationModelTests(unittest.TestCase):
     def test_activity_verifications_are_admin_only_and_track_independent_targets(self):
         created_activity_ids = []
         created_log_ids = []
+        original_roles = {}
         with database_connection() as conn:
+            original_roles = {
+                row['id']: row['role']
+                for row in conn.execute(
+                    'SELECT id, role FROM users WHERE id IN (3, 4)'
+                )
+            }
+            conn.execute("UPDATE users SET role = 'admin' WHERE id IN (3, 4)")
             declaration_cursor = conn.execute('''
                 INSERT INTO activity_history (
                     user_id, type, title, user_declared_count, points_earned, date
@@ -1536,16 +1955,18 @@ class OrganizationModelTests(unittest.TestCase):
             created_activity_ids.append(declaration_activity_id)
             ai_cursor = conn.execute('''
                 INSERT INTO ai_logs (
-                    user_id, activity_id, detected_count, confidence, image_path
-                ) VALUES (1, ?, 4, 0.9, 'verification-test.jpg')
-            ''', (declaration_activity_id,))
+                    user_id, activity_id, detected_count, confidence, image_path,
+                    detected_classes_json
+                ) VALUES (1, NULL, 4, 0.9, 'verification-test.jpg', ?)
+            ''', (json.dumps({'bottle': 3, 'cup': 1}),))
             ai_log_id = ai_cursor.lastrowid
             created_log_ids.append(ai_log_id)
             second_ai_cursor = conn.execute('''
                 INSERT INTO ai_logs (
-                    user_id, activity_id, detected_count, confidence, image_path
-                ) VALUES (1, ?, 2, 0.8, 'verification-test-second.jpg')
-            ''', (declaration_activity_id,))
+                    user_id, activity_id, detected_count, confidence, image_path,
+                    detected_classes_json
+                ) VALUES (1, NULL, 2, 0.8, 'verification-test-second.jpg', ?)
+            ''', (json.dumps({'bottle': 2, 'cup': 0}),))
             second_ai_log_id = second_ai_cursor.lastrowid
             created_log_ids.append(second_ai_log_id)
 
@@ -1587,24 +2008,104 @@ class OrganizationModelTests(unittest.TestCase):
             self.assertIn(f'id="gps_distance-{gps_activity_id}"', page)
             self.assertIn(f'id="gps_steps-{gps_activity_id}"', page)
             self.assertIn(f'id="gps_calories-{gps_activity_id}"', page)
+            self.assertIn('AI判定値は非表示'.encode(), response.data)
+            self.assertNotIn('4 個 / 信頼度 90.0%', page)
+            self.assertNotIn(f'/admin/ai/{ai_log_id}', page)
             self.assertIn('0.000 km', page)
             self.assertIn('0 歩', page)
             self.assertIn('0 kcal', page)
 
             response = self.client.post(
                 f'/admin/activity-verifications/ai_result/{ai_log_id}',
-                data={'csrf_token': 'test-csrf-token', 'status': 'confirmed'},
+                data={
+                    'csrf_token': 'test-csrf-token',
+                    'status': 'confirmed',
+                    'verified_bottle_count': '3',
+                    'verified_cup_count': '1',
+                },
+            )
+            self.assertEqual(response.status_code, 302)
+            same_reviewer_second_pass = self.client.post(
+                f'/admin/activity-verifications/ai_result/{ai_log_id}',
+                data={
+                    'csrf_token': 'test-csrf-token',
+                    'status': 'confirmed',
+                    'verified_bottle_count': '3',
+                    'verified_cup_count': '1',
+                },
+            )
+            self.assertEqual(same_reviewer_second_pass.status_code, 302)
+            with database_connection() as conn:
+                one_reviewer = conn.execute('''
+                    SELECT reviewer_id, reviewer2_id
+                    FROM activity_verifications
+                    WHERE target_type = 'ai_result' AND ai_log_id = ?
+                ''', (ai_log_id,)).fetchone()
+            self.assertEqual(one_reviewer['reviewer_id'], 2)
+            self.assertIsNone(one_reviewer['reviewer2_id'])
+            missing_reference_counts = self.client.post(
+                f'/admin/activity-verifications/ai_result/{second_ai_log_id}',
+                data={
+                    'csrf_token': 'test-csrf-token',
+                    'status': 'confirmed',
+                },
+            )
+            self.assertEqual(missing_reference_counts.status_code, 400)
+            response = self.client.post(
+                f'/admin/activity-verifications/ai_result/{second_ai_log_id}',
+                data={
+                    'csrf_token': 'test-csrf-token',
+                    'status': 'confirmed',
+                    'verified_bottle_count': '2',
+                    'verified_cup_count': '0',
+                },
+            )
+            self.assertEqual(response.status_code, 302)
+            self._login_as(3, 'admin')
+            second_review_page = self.client.get('/admin/activity-verifications')
+            self.assertEqual(second_review_page.status_code, 200)
+            second_review_html = second_review_page.get_data(as_text=True)
+            first_log_row = re.search(
+                rf'<tr id="ai_result-{ai_log_id}".*?</tr>',
+                second_review_html,
+                re.DOTALL,
+            )
+            self.assertIsNotNone(first_log_row)
+            self.assertIn('一次確認とは独立して'.encode(), second_review_page.data)
+            self.assertNotIn('ボトル 3 個 / カップ 1 個', first_log_row.group(0))
+            self.assertNotIn('4 個 / 信頼度 90.0%', first_log_row.group(0))
+            response = self.client.post(
+                f'/admin/activity-verifications/ai_result/{ai_log_id}',
+                data={
+                    'csrf_token': 'test-csrf-token',
+                    'status': 'confirmed',
+                    'verified_bottle_count': '3',
+                    'verified_cup_count': '1',
+                },
             )
             self.assertEqual(response.status_code, 302)
             response = self.client.post(
                 f'/admin/activity-verifications/ai_result/{second_ai_log_id}',
                 data={
                     'csrf_token': 'test-csrf-token',
-                    'status': 'correction_required',
-                    'review_note': '画像を再確認してください。',
+                    'status': 'confirmed',
+                    'verified_bottle_count': '1',
+                    'verified_cup_count': '1',
                 },
             )
             self.assertEqual(response.status_code, 302)
+            self._login_as(4, 'admin')
+            response = self.client.post(
+                f'/admin/activity-verifications/ai_result/{second_ai_log_id}',
+                data={
+                    'csrf_token': 'test-csrf-token',
+                    'status': 'confirmed',
+                    'verified_bottle_count': '1',
+                    'verified_cup_count': '1',
+                },
+            )
+            self.assertEqual(response.status_code, 302)
+            self._login_as(2, 'admin')
             response = self.client.post(
                 f'/admin/activity-verifications/user_declaration/{declaration_activity_id}',
                 data={
@@ -1629,31 +2130,69 @@ class OrganizationModelTests(unittest.TestCase):
                     ''')
                 }
                 history = conn.execute('''
-                    SELECT target_type, status, reviewer_id, reviewed_at, review_note
+                    SELECT target_type, status, reviewer_id, reviewed_at,
+                           review_note, verified_bottle_count, verified_cup_count
                     FROM activity_verification_history
                     ORDER BY id
                 ''').fetchall()
+                ai_reference_rows = conn.execute('''
+                    SELECT verified_bottle_count, verified_cup_count
+                    FROM activity_verifications WHERE target_type = 'ai_result'
+                    ORDER BY ai_log_id
+                ''').fetchall()
+                second_log_consensus = conn.execute('''
+                    SELECT reviewer_id, reviewer2_id, adjudicator_id,
+                           verified_bottle_count, verified_cup_count,
+                           verified_bottle_count_2, verified_cup_count_2,
+                           adjudicated_bottle_count, adjudicated_cup_count
+                    FROM activity_verifications
+                    WHERE target_type = 'ai_result' AND ai_log_id = ?
+                ''', (second_ai_log_id,)).fetchone()
             self.assertEqual(statuses[('ai_result', ai_log_id)], 'confirmed')
             self.assertEqual(
                 statuses[('user_declaration', declaration_activity_id)],
                 'correction_required',
             )
-            self.assertEqual(
-            statuses[('ai_result', second_ai_log_id)],
-            'correction_required',
-            )
+            self.assertEqual(statuses[('ai_result', second_ai_log_id)], 'confirmed')
             self.assertEqual(statuses[('gps_steps', gps_activity_id)], 'confirmed')
-            self.assertEqual(len(history), 4)
-            self.assertTrue(all(row['reviewer_id'] == 2 for row in history))
+            self.assertEqual(len(history), 8)
+            self.assertEqual(
+                {row['reviewer_id'] for row in history},
+                {2, 3, 4},
+            )
             self.assertTrue(all(row['reviewed_at'] for row in history))
-            self.assertEqual(history[1]['review_note'], '画像を再確認してください。')
-            self.assertEqual(history[2]['review_note'], '申告内容の再確認が必要です。')
+            self.assertEqual(history[6]['review_note'], '申告内容の再確認が必要です。')
+            self.assertEqual(history[0]['verified_bottle_count'], 3)
+            self.assertEqual(history[0]['verified_cup_count'], 1)
+            self.assertEqual(len(ai_reference_rows), 2)
+            self.assertEqual(
+                [(row['verified_bottle_count'], row['verified_cup_count'])
+                 for row in ai_reference_rows],
+                [(3, 1), (2, 0)],
+            )
+            self.assertEqual(second_log_consensus['reviewer_id'], 2)
+            self.assertEqual(second_log_consensus['reviewer2_id'], 3)
+            self.assertEqual(second_log_consensus['adjudicator_id'], 4)
+            self.assertEqual(second_log_consensus['verified_bottle_count'], 2)
+            self.assertEqual(second_log_consensus['verified_cup_count'], 0)
+            self.assertEqual(second_log_consensus['verified_bottle_count_2'], 1)
+            self.assertEqual(second_log_consensus['verified_cup_count_2'], 1)
+            self.assertEqual(second_log_consensus['adjudicated_bottle_count'], 1)
+            self.assertEqual(second_log_consensus['adjudicated_cup_count'], 1)
 
             response = self.client.get('/admin/activity-report')
             self.assertEqual(response.status_code, 200)
             report = response.get_data(as_text=True)
+            self.assertIn('画像ごとの目視確認によるAI判定比較'.encode(), response.data)
+            self.assertIn('完全一致率'.encode(), response.data)
+            self.assertIn('100.0%', response.get_data(as_text=True))
+            self.assertIn('100.0%', response.get_data(as_text=True))
+            self.assertIn('20.0%', response.get_data(as_text=True))
+            self.assertIn('50.0%', response.get_data(as_text=True))
+            self.assertIn('二重確認 2 件'.encode(), response.data)
+            self.assertIn('直近12か月'.encode(), response.data)
             for label, expected in (
-                ('AI画像判定', ['1', '0', '1', '0', '0']),
+                ('AI画像判定', ['2', '0', '0', '0', '0']),
                 ('ユーザー申告数', ['0', '0', '1', '0', '0']),
                 ('GPS移動距離', ['0', '1', '0', '0', '1']),
                 ('GPS推定歩数', ['1', '0', '0', '0', '1']),
@@ -1672,8 +2211,8 @@ class OrganizationModelTests(unittest.TestCase):
 
             with database_connection() as conn:
                 conn.execute(
-                    'UPDATE ai_logs SET detected_count = 6 WHERE id = ?',
-                    (ai_log_id,),
+                    'UPDATE ai_logs SET detected_classes_json = ? WHERE id = ?',
+                    (json.dumps({'bottle': 2, 'cup': 0}), ai_log_id),
                 )
             response = self.client.get('/admin/activity-verifications')
             self.assertEqual(response.status_code, 200)
@@ -1730,7 +2269,7 @@ class OrganizationModelTests(unittest.TestCase):
                     WHERE ai_log_id IN (?, ?)
                 ''', (ai_log_id, second_ai_log_id)).fetchone()[0]
             self.assertEqual(persisted_review['status'], 'confirmed')
-            self.assertEqual(history_count, 2)
+            self.assertEqual(history_count, 6)
 
             self._login_as(1)
             response = self.client.post(
@@ -1757,6 +2296,10 @@ class OrganizationModelTests(unittest.TestCase):
                 if created_activity_ids:
                     placeholders = ','.join('?' for _ in created_activity_ids)
                     conn.execute(
+                        f'DELETE FROM activity_point_history WHERE activity_id IN ({placeholders})',
+                        created_activity_ids,
+                    )
+                    conn.execute(
                         f'DELETE FROM activity_verification_history WHERE activity_id IN ({placeholders})',
                         created_activity_ids,
                     )
@@ -1768,6 +2311,302 @@ class OrganizationModelTests(unittest.TestCase):
                         f'DELETE FROM activity_history WHERE id IN ({placeholders})',
                         created_activity_ids,
                     )
+                for user_id, role in original_roles.items():
+                    conn.execute(
+                        'UPDATE users SET role = ? WHERE id = ?', (role, user_id)
+                    )
+
+    def test_admin_activity_report_compares_accuracy_by_ai_confidence_band(self):
+        created_log_ids = []
+        test_logs = [
+            (0.4, 1, 2, 1, 0, 2, 0),
+            (0.6, 2, 2, 1, 1, 1, 1),
+            (0.8, 2, 1, 1, 1, 1, 0),
+            (0.95, 3, 3, 2, 1, 2, 1),
+            (None, 2, 2, 1, 1, 1, 1),
+            (0.95, 0, 0, 0, 0, 0, 0),
+        ]
+        try:
+            with database_connection() as conn:
+                for (
+                    confidence, detected_count, verified_count,
+                    bottle_detected, cup_detected, bottle_verified, cup_verified,
+                ) in test_logs:
+                    cursor = conn.execute('''
+                        INSERT INTO ai_logs (
+                            user_id, detected_count, confidence, result_status,
+                            detected_classes_json
+                        ) VALUES (1, ?, ?, 'detected', ?)
+                    ''', (
+                        detected_count,
+                        confidence,
+                        json.dumps({
+                            'bottle': bottle_detected,
+                            'cup': cup_detected,
+                        }),
+                    ))
+                    log_id = cursor.lastrowid
+                    created_log_ids.append(log_id)
+                    log = conn.execute(
+                        'SELECT * FROM ai_logs WHERE id = ?', (log_id,)
+                    ).fetchone()
+                    conn.execute('''
+                        INSERT INTO activity_verifications (
+                            target_type, ai_log_id, status, reviewer_id,
+                            reviewer2_id, verified_bottle_count,
+                            verified_cup_count, verified_bottle_count_2,
+                            verified_cup_count_2, source_fingerprint
+                        ) VALUES (
+                            'ai_result', ?, 'confirmed', 2, 3, ?, ?, ?, ?, ?
+                        )
+                    ''', (
+                        log_id,
+                        bottle_verified,
+                        cup_verified,
+                        bottle_verified,
+                        cup_verified,
+                        cleanstep.verification_fingerprint('ai_result', log),
+                    ))
+
+            self._login_as(2, 'admin')
+            response = self.client.get('/admin/activity-report')
+            self.assertEqual(response.status_code, 200)
+            report = response.get_data(as_text=True)
+            confidence_table = re.search(
+                r'<table id="ai-confidence-accuracy">(.*?)</table>',
+                report,
+                re.DOTALL,
+            )
+            self.assertIsNotNone(confidence_table)
+            rows = re.findall(
+                r'<tr>\s*<td>(.*?)</td>\s*<td>(.*?)</td>\s*'
+                r'<td>(.*?)</td>\s*<td>(.*?)</td>\s*</tr>',
+                confidence_table.group(1),
+                re.DOTALL,
+            )
+            self.assertEqual(
+                rows,
+                [
+                    (
+                        '25%以上 - 50%未満',
+                        '0 / 1 件（0.0%）',
+                        '0 / 1 件（0.0%）',
+                        '1 / 1 件（100.0%）',
+                    ),
+                    (
+                        '50%以上 - 75%未満',
+                        '1 / 1 件（100.0%）',
+                        '1 / 1 件（100.0%）',
+                        '1 / 1 件（100.0%）',
+                    ),
+                    (
+                        '75%以上 - 90%未満',
+                        '0 / 1 件（0.0%）',
+                        '1 / 1 件（100.0%）',
+                        '0 / 1 件（0.0%）',
+                    ),
+                    (
+                        '90%以上 - 100%以下',
+                        '1 / 1 件（100.0%）',
+                        '1 / 1 件（100.0%）',
+                        '1 / 1 件（100.0%）',
+                    ),
+                ],
+            )
+        finally:
+            with database_connection() as conn:
+                if created_log_ids:
+                    placeholders = ','.join('?' for _ in created_log_ids)
+                    conn.execute(
+                        f'DELETE FROM activity_verification_history '
+                        f'WHERE ai_log_id IN ({placeholders})',
+                        created_log_ids,
+                    )
+                    conn.execute(
+                        f'DELETE FROM activity_verifications '
+                        f'WHERE ai_log_id IN ({placeholders})',
+                        created_log_ids,
+                    )
+                    conn.execute(
+                        f'DELETE FROM ai_logs WHERE id IN ({placeholders})',
+                        created_log_ids,
+                    )
+
+    def test_verified_ai_dataset_export_contains_only_fresh_two_reviewer_agreement(self):
+        created_log_ids = []
+        test_image_dir = tempfile.TemporaryDirectory()
+        original_roles = {}
+        labels = [
+            {
+                'name': 'agreed',
+                'reviewer2_id': 3,
+                'second_counts': (2, 1),
+                'adjudicated': False,
+                'fingerprint': 'fresh',
+            },
+            {
+                'name': 'disagreement',
+                'reviewer2_id': 3,
+                'second_counts': (1, 0),
+                'adjudicated': False,
+                'fingerprint': 'fresh',
+            },
+            {
+                'name': 'adjudicated',
+                'reviewer2_id': 3,
+                'second_counts': (1, 0),
+                'adjudicated': True,
+                'fingerprint': 'fresh',
+            },
+            {
+                'name': 'stale',
+                'reviewer2_id': 3,
+                'second_counts': (2, 1),
+                'adjudicated': False,
+                'fingerprint': 'stale',
+            },
+            {
+                'name': 'missing-image',
+                'reviewer2_id': 3,
+                'second_counts': (2, 1),
+                'adjudicated': False,
+                'fingerprint': 'fresh',
+                'missing_image': True,
+            },
+        ]
+        with database_connection() as conn:
+            original_roles = {
+                row['id']: row['role']
+                for row in conn.execute(
+                    'SELECT id, role FROM users WHERE id IN (2, 3)'
+                )
+            }
+            conn.execute("UPDATE users SET role = 'admin' WHERE id IN (2, 3)")
+            for label in labels:
+                image_name = f'{uuid.uuid4()}.jpg'
+                if not label.get('missing_image'):
+                    (Path(test_image_dir.name) / image_name).write_bytes(
+                        f"image-{label['name']}".encode()
+                    )
+                log_cursor = conn.execute('''
+                    INSERT INTO ai_logs (
+                        user_id, detected_count, confidence, image_path,
+                        result_status, detected_classes_json
+                    ) VALUES (
+                        1, 3, 0.9, ?, 'detected',
+                        '{"bottle":2,"cup":1}'
+                    )
+                ''', (image_name,))
+                log_id = log_cursor.lastrowid
+                created_log_ids.append(log_id)
+                log = conn.execute(
+                    'SELECT * FROM ai_logs WHERE id = ?', (log_id,)
+                ).fetchone()
+                fingerprint = cleanstep.verification_fingerprint('ai_result', log)
+                if label['fingerprint'] == 'stale':
+                    fingerprint = 'outdated-source-fingerprint'
+                bottle_2, cup_2 = label['second_counts']
+                conn.execute('''
+                    INSERT INTO activity_verifications (
+                        target_type, ai_log_id, status, reviewer_id,
+                        reviewer2_id, verified_bottle_count, verified_cup_count,
+                        verified_bottle_count_2, verified_cup_count_2,
+                        adjudicated_bottle_count, adjudicated_cup_count,
+                        adjudicator_id, adjudicated_at, source_fingerprint
+                    ) VALUES (
+                        'ai_result', ?, ?, 2, 3, 2, 1, ?, ?,
+                        ?, ?, ?, ?, ?
+                    )
+                ''', (
+                    log_id,
+                    'correction_required' if label['name'] == 'disagreement' else 'confirmed',
+                    bottle_2, cup_2,
+                    2 if label['adjudicated'] else None,
+                    1 if label['adjudicated'] else None,
+                    4 if label['adjudicated'] else None,
+                    '2026-11-12 10:00:00' if label['adjudicated'] else None,
+                    fingerprint,
+                ))
+
+        try:
+            self._login_as(1)
+            denied = self.client.get('/admin/ai/verified-dataset.zip')
+            self.assertEqual(denied.status_code, 302)
+
+            self._login_as(2, 'admin')
+            with patch.object(cleanstep, 'UPLOAD_FOLDER', test_image_dir.name):
+                response = self.client.get('/admin/ai/verified-dataset.zip')
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.mimetype, 'application/zip')
+                with zipfile.ZipFile(BytesIO(response.data)) as archive:
+                    self.assertEqual(
+                        set(archive.namelist()),
+                        {
+                            'README.txt',
+                            'manifest.jsonl',
+                            next(
+                                name for name in archive.namelist()
+                                if name.startswith('images/')
+                            ),
+                        },
+                    )
+                    manifest = [
+                        json.loads(line)
+                        for line in archive.read('manifest.jsonl')
+                        .decode('utf-8').splitlines()
+                    ]
+                    readme = archive.read('README.txt').decode('utf-8')
+                    self.assertEqual(len(manifest), 1)
+                    self.assertEqual(
+                        manifest[0]['label_source'],
+                        'independent_two_reviewer_agreement',
+                    )
+                    self.assertEqual(
+                        manifest[0]['verified_counts'],
+                        {'bottle': 2, 'cup': 1},
+                    )
+                    self.assertEqual(
+                        archive.read(manifest[0]['image']),
+                        b'image-agreed',
+                    )
+                    self.assertNotIn('user_id', manifest[0])
+                    self.assertIn('矩形アノテーションは含まれない', readme)
+                    self.assertIn(
+                        '第三者が裁定したデータは、この高一致データセットには含めていません。',
+                        readme,
+                    )
+                    self.assertIn('画像ファイル不足・形式不正で除外: 1 件', readme)
+            empty_uploads = tempfile.TemporaryDirectory()
+            try:
+                with patch.object(cleanstep, 'UPLOAD_FOLDER', empty_uploads.name):
+                    missing_files = self.client.get('/admin/ai/verified-dataset.zip')
+                self.assertEqual(missing_files.status_code, 404)
+                self.assertIn('利用可能な学習用データ'.encode(), missing_files.data)
+            finally:
+                empty_uploads.cleanup()
+        finally:
+            with database_connection() as conn:
+                if created_log_ids:
+                    placeholders = ','.join('?' for _ in created_log_ids)
+                    conn.execute(
+                        f'DELETE FROM activity_verification_history '
+                        f'WHERE ai_log_id IN ({placeholders})',
+                        created_log_ids,
+                    )
+                    conn.execute(
+                        f'DELETE FROM activity_verifications '
+                        f'WHERE ai_log_id IN ({placeholders})',
+                        created_log_ids,
+                    )
+                    conn.execute(
+                        f'DELETE FROM ai_logs WHERE id IN ({placeholders})',
+                        created_log_ids,
+                    )
+                for user_id, role in original_roles.items():
+                    conn.execute(
+                        'UPDATE users SET role = ? WHERE id = ?', (role, user_id)
+                    )
+            test_image_dir.cleanup()
 
     def test_unrecorded_gps_metrics_are_not_shown_as_zero_or_reviewable(self):
         with database_connection() as conn:
@@ -2091,6 +2930,11 @@ class OrganizationModelTests(unittest.TestCase):
         try:
             self._login_as(1)
             self._use_mobile_user_agent()
+            mypage = self.client.get('/mypage')
+            self.assertEqual(mypage.status_code, 200)
+            self.assertIn(f'/event/survey/{activity_id}'.encode(), mypage.data)
+            self.assertIn('振り返りを記入'.encode(), mypage.data)
+
             response = self.client.get(f'/event/survey/{activity_id}')
             self.assertEqual(response.status_code, 200)
             self.assertIn('回答内容は主催団体に共有'.encode(), response.data)
@@ -2109,6 +2953,11 @@ class OrganizationModelTests(unittest.TestCase):
             self.assertEqual(response.status_code, 302)
             result_page = self.client.get(response.location)
             self.assertIn('アンケートへのご協力ありがとうございます。'.encode(), result_page.data)
+            mypage = self.client.get('/mypage')
+            self.assertIn('活動後の振り返りと次の行動'.encode(), mypage.data)
+            self.assertIn('振り返りに記録された行動の推移'.encode(), mypage.data)
+            self.assertIn('次回は開始時間を少し遅くしてほしい'.encode(), mypage.data)
+            self.assertNotIn(f'/event/survey/{activity_id}'.encode(), mypage.data)
 
             duplicate = self.client.post(
                 f'/event/survey/{activity_id}', data=answer
@@ -2154,6 +3003,9 @@ class OrganizationModelTests(unittest.TestCase):
                 ''', (feedback_id,)).fetchone()
             self.assertEqual(feedback['action_status'], 'addressed')
             self.assertEqual(feedback['action_note'], '次回から開始時刻を調整する')
+            self._login_as(1)
+            mypage = self.client.get('/mypage')
+            self.assertIn('次回から開始時刻を調整する'.encode(), mypage.data)
         finally:
             with database_connection() as conn:
                 conn.execute('DELETE FROM event_feedback WHERE event_id = ?', (event_id,))
@@ -2183,9 +3035,13 @@ class OrganizationModelTests(unittest.TestCase):
         self._login_as(4)
         response = self.client.get("/organizer/events/1/participants")
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b"owner@example.test", response.data)
-        self.assertIn("予約中", response.get_data(as_text=True))
-        self.assertIn(b"outsider@example.test", response.data)
+        participant_page = response.get_data(as_text=True)
+        # 参加者一覧では連絡先メールアドレスを表示しない。
+        self.assertNotIn("owner@example.test", participant_page)
+        self.assertNotIn("outsider@example.test", participant_page)
+        self.assertIn("Owner", participant_page)
+        self.assertIn("Outsider", participant_page)
+        self.assertIn("予約中", participant_page)
 
         response = self.client.get("/organizer/events")
         self.assertEqual(response.status_code, 200)
@@ -2583,6 +3439,101 @@ class OrganizationModelTests(unittest.TestCase):
         self.assertEqual(failed_log['result_status'], 'failed')
         self.assertIsNone(failed_log['detected_count'])
 
+    def test_trash_deposit_rejects_unknown_bag_size_before_ai(self):
+        bin_name = 'Bag Size Validation Test Bin'
+        with database_connection() as conn:
+            conn.execute('''
+                INSERT INTO trash_bins (name, description, lat, lng)
+                VALUES (?, 'Test location', 35.681236, 139.767125)
+            ''', (bin_name,))
+            bin_id = conn.execute(
+                'SELECT id FROM trash_bins WHERE name = ?', (bin_name,)
+            ).fetchone()['id']
+
+        image = BytesIO()
+        Image.new('RGB', (1, 1), color='white').save(image, format='PNG')
+        image.seek(0)
+        self._login_as(1)
+        self._use_mobile_user_agent()
+        try:
+            with patch.object(cleanstep, 'get_model') as model_lookup:
+                response = self.client.post(
+                    '/trash-bin/deposit',
+                    data={
+                        'csrf_token': 'test-csrf-token',
+                        'bin_id': str(bin_id),
+                        'trash_count': '1',
+                        'bag_size': 'unrecognized size',
+                        'garbage_image': (image, 'invalid-bag-size.png'),
+                    },
+                    content_type='multipart/form-data',
+                )
+            self.assertEqual(response.status_code, 400)
+            self.assertIn('袋サイズの選択内容が不正'.encode(), response.data)
+            model_lookup.assert_not_called()
+        finally:
+            with database_connection() as conn:
+                conn.execute(
+                    'DELETE FROM trash_bins WHERE id = ?', (bin_id,)
+                )
+
+    def test_admin_activity_report_summarizes_declared_bag_size(self):
+        self._login_as(2, 'admin')
+        before_response = self.client.get('/admin/activity-report')
+        self.assertEqual(before_response.status_code, 200)
+
+        def bag_size_counts(report):
+            table = re.search(
+                r'<table id="bag-size-summary">(.*?)</table>',
+                report,
+                re.DOTALL,
+            )
+            self.assertIsNotNone(table)
+            rows = re.findall(
+                r'<tr>\s*<td>(.*?)</td>\s*<td>(\d+) 件</td>\s*</tr>',
+                table.group(1),
+                re.DOTALL,
+            )
+            return {label: int(count) for label, count in rows}
+
+        before = bag_size_counts(before_response.get_data(as_text=True))
+        sizes = (*cleanstep.TRASH_BAG_SIZE_OPTIONS, 'legacy unknown label')
+        created_ids = []
+        try:
+            with database_connection() as conn:
+                for index, size in enumerate(sizes):
+                    cursor = conn.execute('''
+                        INSERT INTO activity_history (
+                            user_id, type, title, trash_count, ai_detected_count,
+                            user_declared_count, points_earned, bag_size, date
+                        ) VALUES (
+                            1, 'trash_bin', ?, 0, 0, 0, 0, ?, ?
+                        )
+                    ''', (
+                        f'Bag Size Report Test {index}',
+                        size,
+                        datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
+                    ))
+                    created_ids.append(cursor.lastrowid)
+
+            response = self.client.get('/admin/activity-report')
+            self.assertEqual(response.status_code, 200)
+            after = bag_size_counts(response.get_data(as_text=True))
+            for size in cleanstep.TRASH_BAG_SIZE_OPTIONS:
+                self.assertEqual(after[size], before[size] + 1)
+            self.assertEqual(
+                after['未分類・旧記録'],
+                before['未分類・旧記録'] + 1,
+            )
+        finally:
+            with database_connection() as conn:
+                if created_ids:
+                    placeholders = ','.join('?' for _ in created_ids)
+                    conn.execute(
+                        f'DELETE FROM activity_history WHERE id IN ({placeholders})',
+                        created_ids,
+                    )
+
     def test_admin_can_register_bin_pin_and_users_see_selected_map(self):
         self._login_as(2, "admin")
         response = self.client.get("/admin/bins")
@@ -2874,11 +3825,32 @@ class OrganizationModelTests(unittest.TestCase):
                 (event_datetime,),
             )
         self._login_as(1)
+        self._use_mobile_user_agent()
         response = self.client.get("/home")
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Legacy Event", response.get_data())
+        self.assertIn(b'href="/events"', response.get_data())
+        self.assertIn(b'href="/my/reservations"', response.get_data())
         self.assertIn(b"openstreetmap.org/search?query=Central%20Park", response.get_data())
         self.assertNotIn(b"<iframe", response.get_data())
+
+        response = self.client.get("/events")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Legacy Event", response.get_data())
+        self.assertIn(b'name="q"', response.get_data())
+
+        response = self.client.get("/events?q=Central%20Park")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Legacy Event", response.get_data())
+
+        response = self.client.get("/events?q=Missing%20Event")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("一致するイベントはありません".encode(), response.get_data())
+        self.assertNotIn(b"Legacy Event", response.get_data())
+
+        response = self.client.get("/my/reservations")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("予約中のイベントはありません".encode(), response.get_data())
 
         response = self.client.get("/event/reserve/1")
         self.assertEqual(response.status_code, 200)
@@ -2907,12 +3879,21 @@ class OrganizationModelTests(unittest.TestCase):
             },
         )
         self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.location, "/event/reservation/1/complete")
+        response = self.client.get(response.location)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("予約を受け付けました".encode(), response.get_data())
+
         with database_connection() as conn:
             reservation = conn.execute('''
                 SELECT status FROM event_reservations
                 WHERE user_id = 1 AND event_id = 1
             ''').fetchone()
         self.assertEqual(reservation["status"], "reserved")
+        response = self.client.get("/my/reservations")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Legacy Event", response.get_data())
+        self.assertIn(b"/event/reserve/1", response.get_data())
         home_response = self.client.get("/home")
         self.assertIn("予約したイベント".encode(), home_response.data)
         self.assertNotIn("予約したイベント（1）".encode(), home_response.data)
@@ -2925,6 +3906,25 @@ class OrganizationModelTests(unittest.TestCase):
         )
         self.assertNotIn(b"<iframe", home_response.data)
 
+        event_started_at = (
+            datetime.now(cleanstep.JST) - timedelta(minutes=5)
+        ).strftime("%Y-%m-%d %H:%M")
+        with database_connection() as conn:
+            conn.execute(
+                'UPDATE events SET datetime = ? WHERE id = 1',
+                (event_started_at,),
+            )
+        response = self.client.get("/my/reservations")
+        self.assertIn("計測を開始".encode(), response.get_data())
+        response = self.client.get("/event/live/1")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("活動計測".encode(), response.get_data())
+
+        with database_connection() as conn:
+            conn.execute(
+                'UPDATE events SET datetime = ? WHERE id = 1',
+                (event_datetime,),
+            )
         response = self.client.post(
             "/event/reserve/1",
             data={
@@ -3633,14 +4633,13 @@ class OrganizationModelTests(unittest.TestCase):
         self.assertIn('基本の活動記録', mobile_page)
         self.assertIn('最近の活動履歴', mobile_page)
         self.assertIn('href="/trash-bin"', mobile_page)
-        self.assertNotIn('href="/events"', mobile_page)
-        self.assertNotIn('href="/my/reservations"', mobile_page)
+        self.assertIn('href="/events"', mobile_page)
+        self.assertIn('href="/my/reservations"', mobile_page)
         self.assertNotIn('おすすめイベント', mobile_page)
 
-        for pc_only_path in ('/events', '/my/reservations', '/event/reserve/1'):
-            response = self.client.get(pc_only_path, headers=mobile_user_agent)
-            self.assertEqual(response.status_code, 302)
-            self.assertEqual(response.location, '/home')
+        for event_path in ('/events', '/my/reservations'):
+            response = self.client.get(event_path, headers=mobile_user_agent)
+            self.assertEqual(response.status_code, 200)
 
         fixed_pc_response = self.client.get(
             '/view-mode/pc?next=/home',
@@ -3738,6 +4737,21 @@ class OrganizationModelTests(unittest.TestCase):
             self.assertEqual(report_get.status_code, 200)
             self.assertIn("地域のゴミ・課題を報告", report_get.get_data(as_text=True))
 
+            event_datetime = (
+                datetime.now(cleanstep.JST) + timedelta(days=14)
+            ).strftime("%Y-%m-%d %H:%M")
+            with database_connection() as conn:
+                event_cursor = conn.execute('''
+                    INSERT INTO events (
+                        name, location, latitude, longitude, datetime,
+                        bonus_points, capacity, status, review_status
+                    ) VALUES (
+                        '駅前課題連携清掃イベント', '横浜駅西口ロータリー',
+                        35.465833, 139.622313, ?, 20, 20, 'open', 'approved'
+                    )
+                ''', (event_datetime,))
+                event_id = event_cursor.lastrowid
+
             report_post = self.client.post(
                 "/issues/report",
                 headers=mobile_user_agent,
@@ -3753,15 +4767,39 @@ class OrganizationModelTests(unittest.TestCase):
                 },
             )
             self.assertEqual(report_post.status_code, 302)
-            self.assertEqual(report_post.location, "/map")
+            self.assertRegex(report_post.location, r"^/map\?issue_id=\d+$")
+            issue_id = int(report_post.location.rsplit("=", 1)[1])
 
-            map_resp = self.client.get("/map")
+            map_resp = self.client.get(report_post.location)
             self.assertEqual(map_resp.status_code, 200)
             map_page = map_resp.get_data(as_text=True)
+            self.assertIn("報告した課題を地図と一覧で表示しています".encode(), map_resp.data)
             self.assertIn("駅前ペットボトル散乱テスト", map_page)
             self.assertIn("横浜駅西口ロータリー", map_page)
+            self.assertIn('id="issue-{}'.format(issue_id), map_page)
+            self.assertIn("駅前課題連携清掃イベント", map_page)
+            self.assertIn(f"/event/reserve/{event_id}", map_page)
+            self.assertIn(f"/proposals?issue_id={issue_id}", map_page)
+
+            proposal_resp = self.client.get(
+                f"/proposals?issue_id={issue_id}&location=横浜駅西口ロータリー"
+            )
+            self.assertEqual(proposal_resp.status_code, 200)
+            proposal_page = proposal_resp.get_data(as_text=True)
+            self.assertIn(
+                "横浜駅西口ロータリーの清掃・環境改善",
+                proposal_page,
+            )
+            self.assertIn("重点清掃イベントの開催", proposal_page)
+            self.assertIn(
+                "自販機横にごみ箱がない",
+                proposal_page,
+            )
         finally:
             with database_connection() as conn:
+                conn.execute(
+                    "DELETE FROM events WHERE name = '駅前課題連携清掃イベント'"
+                )
                 conn.execute(
                     "DELETE FROM issue_reports WHERE title = '駅前ペットボトル散乱テスト'"
                 )
@@ -3802,6 +4840,14 @@ class OrganizationModelTests(unittest.TestCase):
                 issue_id = conn.execute(
                     "SELECT id FROM issue_reports WHERE title = '公園ベンチ裏の空き缶溜まり' ORDER BY id DESC LIMIT 1"
                 ).fetchone()["id"]
+                previous_month = (
+                    datetime.now(timezone.utc).date().replace(day=1)
+                    - timedelta(days=1)
+                ).replace(day=1)
+                conn.execute(
+                    'UPDATE issue_reports SET created_at = ? WHERE id = ?',
+                    (f'{previous_month:%Y-%m}-15 12:00:00', issue_id),
+                )
                 proposal_id = conn.execute(
                     "SELECT id FROM improvement_proposals WHERE title = 'みなとみらいベンチ横ごみ箱増設案' ORDER BY id DESC LIMIT 1"
                 ).fetchone()["id"]
@@ -3810,6 +4856,40 @@ class OrganizationModelTests(unittest.TestCase):
             admin_issues_get = self.client.get("/admin/issues")
             self.assertEqual(admin_issues_get.status_code, 200)
             self.assertIn("公園ベンチ裏の空き缶溜まり", admin_issues_get.get_data(as_text=True))
+            self.assertIn("対応状況と環境変化は別々に集計".encode(), admin_issues_get.data)
+            self.assertIn("対応状況からは環境改善を判断していません".encode(), admin_issues_get.data)
+            self.assertIn("地域課題の月別推移（直近12か月）".encode(), admin_issues_get.data)
+            with database_connection() as conn:
+                regional_data = cleanstep._load_regional_issue_analytics(conn)
+                monthly_rows = regional_data[
+                    'issue_time_series'
+                ]
+                self.assertIsNone(next(
+                    issue for issue in regional_data['issues']
+                    if issue['id'] == issue_id
+                )['reporter_name'])
+                self.assertIsNone(next(
+                    proposal for proposal in regional_data['proposals']
+                    if proposal['id'] == proposal_id
+                )['author_name'])
+                admin_data = cleanstep._load_regional_issue_analytics(
+                    conn, include_personal_info=True
+                )
+                self.assertIsNotNone(next(
+                    issue for issue in admin_data['issues']
+                    if issue['id'] == issue_id
+                )['reporter_name'])
+                self.assertIsNotNone(next(
+                    proposal for proposal in admin_data['proposals']
+                    if proposal['id'] == proposal_id
+                )['author_name'])
+            self.assertEqual(len(monthly_rows), 12)
+            self.assertEqual(monthly_rows[-1]['month'], datetime.now(timezone.utc).strftime('%Y-%m'))
+            previous_month_row = next(
+                row for row in monthly_rows
+                if row['month'] == previous_month.strftime('%Y-%m')
+            )
+            self.assertGreaterEqual(previous_month_row['report_count'], 1)
 
             status_post = self.client.post(
                 f"/admin/issues/{issue_id}/status",
@@ -3820,6 +4900,48 @@ class OrganizationModelTests(unittest.TestCase):
                 },
             )
             self.assertEqual(status_post.status_code, 302)
+            with database_connection() as conn:
+                issue = conn.execute('''
+                    SELECT status, environment_status, environment_note
+                    FROM issue_reports WHERE id = ?
+                ''', (issue_id,)).fetchone()
+            self.assertEqual(issue['status'], 'in_progress')
+            self.assertEqual(issue['environment_status'], 'unverified')
+            self.assertEqual(issue['environment_note'], '')
+
+            missing_evidence = self.client.post(
+                f"/admin/issues/{issue_id}/status",
+                data={
+                    "csrf_token": "test-csrf-token",
+                    "status": "resolved",
+                    "environment_status": "improved",
+                    "environment_note": "",
+                },
+            )
+            self.assertEqual(missing_evidence.status_code, 400)
+
+            resolved_post = self.client.post(
+                f"/admin/issues/{issue_id}/status",
+                data={
+                    "csrf_token": "test-csrf-token",
+                    "status": "resolved",
+                    "action_note": "ごみを回収しました",
+                    "environment_status": "improved",
+                    "environment_note": "翌週の現地確認で散乱が減少していることを確認",
+                },
+            )
+            self.assertEqual(resolved_post.status_code, 302)
+            with database_connection() as conn:
+                issue = conn.execute('''
+                    SELECT status, environment_status, environment_note,
+                           environment_checked_by, environment_checked_at
+                    FROM issue_reports WHERE id = ?
+                ''', (issue_id,)).fetchone()
+            self.assertEqual(issue['status'], 'resolved')
+            self.assertEqual(issue['environment_status'], 'improved')
+            self.assertIn('現地確認で散乱が減少', issue['environment_note'])
+            self.assertEqual(issue['environment_checked_by'], 2)
+            self.assertTrue(issue['environment_checked_at'])
 
             prop_status_post = self.client.post(
                 f"/admin/proposals/{proposal_id}/status",
@@ -3830,6 +4952,52 @@ class OrganizationModelTests(unittest.TestCase):
                 },
             )
             self.assertEqual(prop_status_post.status_code, 302)
+            missing_execution_record = self.client.post(
+                f"/admin/proposals/{proposal_id}/status",
+                data={
+                    "csrf_token": "test-csrf-token",
+                    "status": "completed",
+                    "admin_comment": "対策を実施しました",
+                },
+            )
+            self.assertEqual(missing_execution_record.status_code, 400)
+            invalid_execution_date = self.client.post(
+                f"/admin/proposals/{proposal_id}/status",
+                data={
+                    "csrf_token": "test-csrf-token",
+                    "status": "completed",
+                    "implementation_details": "分別ごみ箱を1基設置",
+                    "implemented_on": "来月",
+                    "outcome_note": "ごみの散乱が減少",
+                },
+            )
+            self.assertEqual(invalid_execution_date.status_code, 400)
+            completed_post = self.client.post(
+                f"/admin/proposals/{proposal_id}/status",
+                data={
+                    "csrf_token": "test-csrf-token",
+                    "status": "completed",
+                    "admin_comment": "現地確認済み",
+                    "implementation_details": "分別ごみ箱を1基設置",
+                    "implemented_on": "2026-11-10",
+                    "outcome_note": "翌週の現地確認で散乱の減少を確認",
+                },
+            )
+            self.assertEqual(completed_post.status_code, 302)
+            with database_connection() as conn:
+                proposal = conn.execute('''
+                    SELECT status, implementation_details, implemented_on,
+                           outcome_note
+                    FROM improvement_proposals WHERE id = ?
+                ''', (proposal_id,)).fetchone()
+            self.assertEqual(proposal['status'], 'completed')
+            self.assertEqual(proposal['implementation_details'], '分別ごみ箱を1基設置')
+            self.assertEqual(proposal['implemented_on'], '2026-11-10')
+            self.assertEqual(proposal['outcome_note'], '翌週の現地確認で散乱の減少を確認')
+            completed_page = self.client.get('/admin/issues')
+            self.assertIn('実施記録'.encode(), completed_page.data)
+            self.assertIn('分別ごみ箱を1基設置'.encode(), completed_page.data)
+            self.assertIn('翌週の現地確認で散乱の減少を確認'.encode(), completed_page.data)
         finally:
             with database_connection() as conn:
                 conn.execute(
@@ -3838,12 +5006,209 @@ class OrganizationModelTests(unittest.TestCase):
                 conn.execute(
                     "DELETE FROM improvement_proposals WHERE title = 'みなとみらいベンチ横ごみ箱増設案'"
                 )
+                conn.execute('''
+                    DELETE FROM issue_status_history
+                    WHERE issue_id IN (
+                        SELECT id FROM issue_reports
+                        WHERE title = '公園ベンチ裏の空き缶溜まり'
+                    )
+                ''')
                 conn.execute(
                     "DELETE FROM issue_reports WHERE title = '公園ベンチ裏の空き缶溜まり'"
                 )
                 conn.execute(
                     "DELETE FROM user_notifications WHERE title LIKE '%公園ベンチ裏の空き缶溜まり%'"
                 )
+
+    def test_location_recurrence_analysis_reports_repeat_interval(self):
+        location = "再発分析テスト地点"
+        report_date = datetime.now(timezone.utc).replace(
+            hour=12, minute=0, second=0, microsecond=0
+        )
+        try:
+            with database_connection() as conn:
+                conn.executemany('''
+                    INSERT INTO issue_reports (
+                        user_id, title, location, trash_type, severity,
+                        environment_status, created_at
+                    ) VALUES (
+                        1, ?, ?, '空き缶・ビン', 'medium', ?, ?
+                    )
+                ''', [
+                    (
+                        '再発分析初回報告',
+                        location,
+                        'improved',
+                        (report_date - timedelta(days=5)).strftime(
+                            '%Y-%m-%d %H:%M:%S'
+                        ),
+                    ),
+                    (
+                        '再発分析再報告',
+                        location,
+                        'recurred',
+                        report_date.strftime('%Y-%m-%d %H:%M:%S'),
+                    ),
+                ])
+                recurrence = next(
+                    row for row in cleanstep._load_regional_issue_analytics(conn)[
+                        'location_recurrence'
+                    ]
+                    if row['location'] == location
+                )
+
+            self.assertEqual(recurrence['report_count'], 2)
+            self.assertEqual(recurrence['repeat_report_count'], 1)
+            self.assertEqual(recurrence['average_days_between_reports'], 5.0)
+            self.assertEqual(recurrence['confirmed_recurrence_count'], 1)
+            self._login_as(2, 'admin')
+            response = self.client.get('/admin/issues')
+            self.assertEqual(response.status_code, 200)
+            self.assertIn('同じ場所での再報告・再発分析'.encode(), response.data)
+            self.assertIn(location.encode(), response.data)
+            self.assertIn('再報告は同じ場所で報告が繰り返された'.encode(), response.data)
+        finally:
+            with database_connection() as conn:
+                conn.execute(
+                    'DELETE FROM issue_reports WHERE location = ?', (location,)
+                )
+
+    def test_issue_analysis_groups_reports_by_nearest_bin_distance(self):
+        location = 'ごみ箱距離分析テスト地点'
+        first_bin = 'ごみ箱距離分析テスト設置A'
+        second_bin = 'ごみ箱距離分析テスト設置B'
+        issue_titles = [
+            '距離分析テスト報告100m以内',
+            '距離分析テスト報告300m以内',
+            '距離分析テスト報告300m超',
+            '距離分析テスト座標なし',
+        ]
+        with database_connection() as conn:
+            baseline_without_coordinates = conn.execute('''
+                SELECT COUNT(*) FROM issue_reports
+                WHERE latitude IS NULL OR longitude IS NULL
+            ''').fetchone()[0]
+            conn.executemany('''
+                INSERT INTO trash_bins (name, description, lat, lng, waste_types)
+                VALUES (?, '距離分析テスト用', ?, ?, 'テスト容器')
+            ''', [
+                (first_bin, -80.0, -150.0),
+                (second_bin, -80.0, -149.0),
+            ])
+            conn.executemany('''
+                INSERT INTO issue_reports (
+                    user_id, title, location, latitude, longitude,
+                    trash_type, severity
+                ) VALUES (1, ?, ?, ?, ?, ?, 'medium')
+            ''', [
+                (issue_titles[0], location, -79.9995, -150.0, '距離分析テスト容器'),
+                (issue_titles[1], location, -79.998, -150.0, '距離分析テスト容器'),
+                (issue_titles[2], location, -79.995, -150.0, '距離分析テスト容器'),
+                (issue_titles[3], location, None, None, '距離分析テスト缶'),
+            ])
+
+        try:
+            with database_connection() as conn:
+                data = cleanstep._load_regional_issue_analytics(conn)
+
+            test_groups = {
+                row['distance_band']: row
+                for row in data['bin_proximity_summary']
+                if row['trash_type'] == '距離分析テスト容器'
+            }
+            self.assertEqual(
+                set(test_groups),
+                {'100m以内', '100m超〜300m以内', '300m超'},
+            )
+            self.assertEqual(test_groups['100m以内']['report_count'], 1)
+            self.assertEqual(test_groups['100m超〜300m以内']['report_count'], 1)
+            self.assertEqual(test_groups['300m超']['report_count'], 1)
+            self.assertEqual(
+                test_groups['100m以内']['average_distance_m'],
+                round(cleanstep._haversine_distance_meters(
+                    -79.9995, -150.0, -80.0, -150.0
+                )),
+            )
+            nearest_report = next(
+                row for row in data['issue_bin_proximity']
+                if row['title'] == issue_titles[0]
+            )
+            self.assertEqual(nearest_report['nearest_bin_name'], first_bin)
+            self.assertEqual(nearest_report['nearest_bin_waste_types'], 'テスト容器')
+            self.assertEqual(
+                data['issues_without_coordinates'],
+                baseline_without_coordinates + 1,
+            )
+
+            self._login_as(2, 'admin')
+            response = self.client.get('/admin/issues')
+            self.assertEqual(response.status_code, 200)
+            self.assertIn('課題報告地点と登録ごみ箱の距離分析'.encode(), response.data)
+            self.assertIn(first_bin.encode(), response.data)
+            self.assertIn('登録場所との距離関係を示す記述的な集計'.encode(), response.data)
+        finally:
+            with database_connection() as conn:
+                conn.execute(
+                    'DELETE FROM issue_reports WHERE title LIKE ?',
+                    ('距離分析テスト%',),
+                )
+                conn.execute(
+                    'DELETE FROM trash_bins WHERE name LIKE ?',
+                    ('ごみ箱距離分析テスト設置%',),
+                )
+
+    def test_event_state_comparison_groups_self_reported_transitions(self):
+        location = '活動前後比較テスト地点'
+        event_name = '活動前後比較テストイベント'
+        before_state = '広範囲にごみが散乱していた'
+        after_state = 'きれいになったが再発注意'
+        with database_connection() as conn:
+            event_id = conn.execute('''
+                INSERT INTO events (
+                    name, location, datetime, bonus_points, status, review_status
+                ) VALUES (?, ?, '2035-01-01 10:00', 0, 'open', 'approved')
+            ''', (event_name, location)).lastrowid
+            conn.executemany('''
+                INSERT INTO activity_history (
+                    user_id, event_id, type, title, before_state, after_state
+                ) VALUES (?, ?, 'event', ?, ?, ?)
+            ''', [
+                (1, event_id, event_name, before_state, after_state),
+                (3, event_id, event_name, before_state, after_state),
+            ])
+
+        try:
+            with database_connection() as conn:
+                data = cleanstep._load_regional_issue_analytics(conn)
+            comparison = next(
+                row for row in data['event_state_comparisons']
+                if row['location'] == location
+            )
+            self.assertEqual(comparison['activity_count'], 2)
+            self.assertEqual(comparison['before_state'], before_state)
+            self.assertEqual(comparison['after_state'], after_state)
+            record = next(
+                row for row in data['event_state_changes']
+                if row['location'] == location
+            )
+            self.assertEqual(
+                record['comparison_result'],
+                '改善・再発注意（参加者評価）',
+            )
+
+            self._login_as(2, 'admin')
+            response = self.client.get('/admin/issues')
+            self.assertEqual(response.status_code, 200)
+            self.assertIn('清掃前後の状態比較（参加者の自己評価）'.encode(), response.data)
+            self.assertIn(location.encode(), response.data)
+            self.assertIn('改善・再発注意'.encode(), response.data)
+            self.assertIn('実測値や独立した現地検証ではなく'.encode(), response.data)
+        finally:
+            with database_connection() as conn:
+                conn.execute(
+                    'DELETE FROM activity_history WHERE event_id = ?', (event_id,)
+                )
+                conn.execute('DELETE FROM events WHERE id = ?', (event_id,))
 
     def test_part3_bin_management_and_issue_to_event_prefill(self):
         self._login_as(1)

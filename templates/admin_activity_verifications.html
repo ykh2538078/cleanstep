@@ -42,7 +42,8 @@
         <h1>活動データ確認</h1>
         <p class="note">
             AI判定・自己申告・GPSなど、データの種類ごとに確認状態を管理します。「確認済み」は記録値や判定内容を確認したことを示すもので、実際の回収量や移動を保証するものではありません。
-            値が変更された記録は自動的に未確認として扱います。実回収量は測定値がないため対象外です。
+            AI画像は一次確認者と二次確認者が互いの結果を見ずにボトル・カップ数を数えます。不一致は両者以外の管理者が裁定します。AI判定値も一次・二次確認者には非表示です。新しいごみ箱活動のポイントは確認完了まで保留され、合意・裁定された件数を基準に確定します。
+            値が変更された記録は自動的に未確認として扱います。ポイント計算・袋サイズの申告には影響しません。
         </p>
         {% for category, message in get_flashed_messages(with_categories=true) %}
             <div class="message" role="status">{{ message }}</div>
@@ -93,20 +94,45 @@
                                 <td>{% if item.image_url %}<img class="thumb" src="{{ item.image_url }}" alt="AI判定画像">{% else %}画像なし{% endif %}</td>
                             {% endif %}
                             <td>
-                                {% if item.value is not none %}{{ item.value }}{% else %}未記録{% endif %}
+                                {% if target_type == 'ai_result' and item.review_action in ['first', 'first_edit', 'second'] %}
+                                    独立した画像確認（AI判定値は非表示）
+                                {% elif item.value is not none %}{{ item.value }}{% else %}未記録{% endif %}
+                                {% if target_type == 'ai_result' and item.review_action not in ['first', 'first_edit', 'second'] and item.detected_bottle_count is not none %}
+                                    <br><span class="note">AI推定: ボトル {{ item.detected_bottle_count }} 個 / カップ {{ item.detected_cup_count }} 個</span>
+                                    {% if item.reviewer_id and item.review_action in ['adjudicate', 'adjudication_wait', 'complete'] %}
+                                        <br><span class="note">一次確認: ボトル {{ item.verified_bottle_count }} 個 / カップ {{ item.verified_cup_count }} 個</span>
+                                    {% endif %}
+                                    {% if item.reviewer2_id and item.review_action in ['adjudicate', 'adjudication_wait', 'complete'] %}
+                                        <br><span class="note">二次確認: ボトル {{ item.verified_bottle_count_2 }} 個 / カップ {{ item.verified_cup_count_2 }} 個</span>
+                                    {% endif %}
+                                    {% if item.consensus_bottle_count is not none and item.consensus_cup_count is not none %}
+                                        <br><strong class="note">合意・裁定値: ボトル {{ item.consensus_bottle_count }} 個 / カップ {{ item.consensus_cup_count }} 個</strong>
+                                    {% endif %}
+                                {% endif %}
                                 {% if item.activity_title %}<br><span class="note">{{ item.activity_title }}</span>{% endif %}
-                                {% if item.detail_url %}<br><a href="{{ item.detail_url }}">AI判定詳細</a>{% endif %}
-                                {% if item.result_status == 'no_detection' %}<br><span class="note">判定完了・検出0件</span>{% endif %}
+                                {% if target_type == 'ai_result' and item.activity_title and item.points_status %}
+                                    <br><span class="note">
+                                        {% if item.points_status == 'pending' %}ポイント保留中（仮 {{ item.points_pending }} pt）
+                                        {% elif item.points_status == 'awarded' %}確定済みポイント {{ item.points_earned }} pt
+                                        {% else %}確認結果により確定ポイントなし{% endif %}
+                                    </span>
+                                {% endif %}
+                                {% if item.detail_url and item.review_action not in ['first', 'first_edit', 'second'] %}<br><a href="{{ item.detail_url }}">AI判定詳細</a>{% endif %}
+                                {% if item.result_status == 'no_detection' and item.review_action not in ['first', 'first_edit', 'second'] %}<br><span class="note">判定完了・検出0件</span>{% endif %}
                                 {% if item.stale %}<br><span class="status status-unreviewed">値の変更により再確認が必要</span>{% endif %}
-                                {% if item.review_note %}<br><span class="note">前回メモ：{{ item.review_note }}</span>{% endif %}
+                                {% if item.review_note and item.review_action not in ['second'] %}<br><span class="note">確認メモ：{{ item.review_note }}</span>{% endif %}
                             </td>
                             <td>{{ item.user_name }}</td>
                             <td>{{ item.date or '—' }}</td>
                             <td class="status status-{{ item.status }}">
-                                {% if item.status == 'unrecorded' %}未記録
+                                {% if target_type == 'ai_result' and item.review_stage == 'agreed' %}二名一致・合意
+                                {% elif target_type == 'ai_result' and item.review_stage == 'adjudicated' %}第三者裁定済み
+                                {% elif item.status == 'unrecorded' %}未記録
                                 {% elif item.status == 'confirmed' %}確認済み
                                 {% elif item.status == 'correction_required' %}要修正
                                 {% elif item.status == 'failed' %}判定失敗
+                                {% elif target_type == 'ai_result' and item.review_stage == 'second_review_pending' %}一次確認済み・二次確認待ち
+                                {% elif target_type == 'ai_result' and item.review_stage == 'adjudication_pending' %}意見不一致・第三者裁定待ち
                                 {% else %}未確認{% endif %}
                             </td>
                             <td>{% if item.reviewed_at %}{{ item.reviewer_name or '管理者ID ' ~ item.reviewer_id }}<br>{{ item.reviewed_at }}{% else %}—{% endif %}</td>
@@ -115,21 +141,55 @@
                                     値が未記録のため確認対象外です。
                                 {% elif not item.reviewable %}
                                     判定結果がないため確認対象外です。
+                                {% elif target_type == 'ai_result' and item.review_action == 'complete' %}
+                                    二名の確認が一致しています。
+                                {% elif target_type == 'ai_result' and item.review_action == 'adjudication_wait' %}
+                                    一次・二次確認者以外の管理者による裁定を待っています。
                                 {% else %}
                                 <form class="review-form" method="POST" action="{{ url_for('update_activity_verification', target_type=item.target_type, target_id=item.target_id) }}">
                                     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                                    <label>
+                                    {% if target_type != 'ai_result' %}
+                                      <label>
                                         状態
                                         <select name="status">
                                             <option value="unreviewed" {% if item.status == 'unreviewed' %}selected{% endif %}>未確認に戻す</option>
                                             <option value="confirmed" {% if item.status == 'confirmed' %}selected{% endif %}>確認済み</option>
                                             <option value="correction_required" {% if item.status == 'correction_required' %}selected{% endif %}>要修正</option>
                                         </select>
-                                    </label>
-                                    <label>
+                                      </label>
+                                      <label>
                                         確認メモ（要修正の場合は必須）
                                         <textarea name="review_note" maxlength="1000">{{ item.review_note or '' }}</textarea>
-                                    </label>
+                                      </label>
+                                    {% else %}
+                                      {% if item.review_action != 'first_edit' %}
+                                        <input type="hidden" name="status" value="confirmed">
+                                      {% endif %}
+                                      {% if item.review_action == 'adjudicate' %}
+                                        <p class="note">二名の確認が異なります。画像を再確認し、裁定値を入力してください。</p>
+                                      {% elif item.review_action == 'second' %}
+                                        <p class="note">一次確認とは独立して画像を数えてください。一次確認値とAI判定値は表示していません。</p>
+                                      {% else %}
+                                        <p class="note">一次確認です。AI判定値を見ずに画像内のごみを数えてください。</p>
+                                      {% endif %}
+                                      <label>
+                                        {% if item.review_action == 'adjudicate' %}裁定したボトル数{% else %}目視確認したボトル数{% endif %}
+                                        <input type="number" name="verified_bottle_count" min="0" max="1000" required value="{% if item.review_action == 'first_edit' %}{{ item.verified_bottle_count }}{% endif %}">
+                                      </label>
+                                      <label>
+                                        {% if item.review_action == 'adjudicate' %}裁定したカップ数{% else %}目視確認したカップ数{% endif %}
+                                        <input type="number" name="verified_cup_count" min="0" max="1000" required value="{% if item.review_action == 'first_edit' %}{{ item.verified_cup_count }}{% endif %}">
+                                      </label>
+                                      <label>
+                                        確認メモ（任意）
+                                        <textarea name="review_note" maxlength="1000"></textarea>
+                                      </label>
+                                    {% endif %}
+                                    {% if target_type == 'ai_result' %}
+                                        {% if item.review_action == 'first_edit' %}
+                                            <select name="status"><option value="confirmed">一次確認を保存</option><option value="unreviewed">確認をリセット</option></select>
+                                        {% endif %}
+                                    {% endif %}
                                     <button type="submit">状態を保存</button>
                                 </form>
                                 {% endif %}
