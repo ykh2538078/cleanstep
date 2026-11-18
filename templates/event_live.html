@@ -74,6 +74,7 @@
         {% endfor %}
         <div class="card">
             <div class="status-badge">🔴 活動時間を計測中</div>
+            {% if event_demo_mode %}<div class="warning-box"><span class="warning-title">デモモード</span><p class="warning-text">GPS・歩数・移動距離・消費カロリーは模擬表示です。実際の位置情報は取得・保存しません。</p></div>{% endif %}
             
             <!-- 🔑 Python（app.py）から引き渡されたイベントデータを動的に描画 -->
             <div class="event-title">{{ event['name'] }}</div>
@@ -83,6 +84,7 @@
             </div>
             
             <p class="success-text">イベント完了には最低{{ min_duration_minutes }}分間の計測が必要です。</p>
+            {% if event_demo_mode %}<p class="warning-text">デモGPS計測を開始すると、模擬の歩数・距離・カロリーが自動で増加します。</p>{% endif %}
             {% if location_check_required %}
                 <p class="warning-text">開催地点が登録されているため、完了時に開催地点から{{ location_radius_meters }}m以内のGPS位置情報を確認します。</p>
             {% endif %}
@@ -104,20 +106,20 @@
                     <span class="measure-value" id="calories_val">未計測</span>
                 </div>
             </div>
-            <button type="button" class="gps-button" id="gps_toggle">GPS計測を開始</button>
-            <p class="gps-status" id="gps_status" role="status" aria-live="polite">{% if location_check_required %}このイベントは開催地点でのGPS確認が必要です。{% else %}GPS計測は任意です。位置情報を使わずにイベントを完了できます。{% endif %}</p>
-            <p class="gps-status" id="motion_status" aria-live="polite">歩数センサーはGPS計測開始時に確認します。利用できない場合はGPSから推定します。</p>
+            <button type="button" class="gps-button" id="gps_toggle">{% if event_demo_mode %}デモGPS計測を開始{% else %}GPS計測を開始{% endif %}</button>
+            <p class="gps-status" id="gps_status" role="status" aria-live="polite">{% if event_demo_mode %}デモGPS計測はまだ開始されていません。{% elif location_check_required %}このイベントは開催地点でのGPS確認が必要です。{% else %}GPS計測は任意です。位置情報を使わずにイベントを完了できます。{% endif %}</p>
+            <p class="gps-status" id="motion_status" aria-live="polite">{% if event_demo_mode %}デモ用の模擬値を表示します（実センサーは使用しません）。{% else %}歩数センサーはGPS計測開始時に確認します。利用できない場合はGPSから推定します。{% endif %}</p>
             
             <!-- ⚠ 計測値の説明 -->
             <div class="warning-box">
-                <span class="warning-title">⚠ 計測値について：</span>
-                <p class="warning-text">移動距離はGPSから集計します。歩数センサーが使える場合は端末の加速度センサーで測定し、使えない場合はGPS距離から推定します。消費カロリーは体重70kgを仮定した概算です。GPSの誤差があるため参考値であり、イベントポイントの算出には使用しません。位置情報は完了時に集計値だけを保存し、生の位置履歴は保存しません。</p>
+                <span class="warning-title">⚠ {% if event_demo_mode %}デモ表示について：{% else %}計測値について：{% endif %}</span>
+                <p class="warning-text">{% if event_demo_mode %}歩数・移動距離・消費カロリーはデモ用に生成した模擬値です。実際のGPS座標や端末センサーは使用せず、実測データとしては扱いません。{% else %}移動距離はGPSから集計します。歩数センサーが使える場合は端末の加速度センサーで測定し、使えない場合はGPS距離から推定します。消費カロリーは体重70kgを仮定した概算です。GPSの誤差があるため参考値であり、イベントポイントの算出には使用しません。位置情報は完了時に集計値だけを保存し、生の位置履歴は保存しません。{% endif %}</p>
             </div>
 
             <!-- ✅ イベント参加結果の確認 -->
             <div class="success-box">
                 <span class="success-title">✅ イベント参加の記録</span>
-                <p class="success-text">最低{{ min_duration_minutes }}分間の計測後に活動を終了すると、参加履歴とイベントボーナスが記録されます。{% if location_check_required %}開催地点から{{ location_radius_meters }}m以内のGPS確認が必要です。{% else %}GPS計測を行わなかった場合、距離・歩数・カロリーは未計測になります。{% endif %}</p>
+                <p class="success-text">最低{{ min_duration_minutes }}分間の計測後に活動を終了すると、参加履歴とイベントボーナスが記録されます。{% if event_demo_mode %}デモGPS計測を開始すると模擬の歩数・距離・カロリーが記録されます。{% elif location_check_required %}開催地点から{{ location_radius_meters }}m以内のGPS確認が必要です。{% else %}GPS計測を行わなかった場合、距離・歩数・カロリーは未計測になります。{% endif %}</p>
             </div>
         </div>
 
@@ -129,6 +131,7 @@
             <input type="hidden" name="detox_duration" id="detox_input" value="0">
             <input type="hidden" name="gps_points" id="gps_points_input" value="[]">
             <input type="hidden" name="device_steps" id="device_steps_input" value="">
+            <input type="hidden" name="demo_gps_seconds" id="demo_gps_seconds_input" value="0">
             <div class="card" style="padding: 18px 20px; margin-bottom: 16px;">
                 <div style="font-weight:bold; font-size:15px; color:#2c3e50; margin-bottom:12px; border-left:4px solid #2ecc71; padding-left:8px;">
                     📝 活動前後の状態と役割の記録（地域改善データ）
@@ -173,6 +176,9 @@
     <script>
         const startedAt = {{ started_at_epoch|tojson }};
         const locationCheckRequired = {{ location_check_required|tojson }};
+        const eventDemoMode = {{ event_demo_mode|tojson }};
+        let demoGpsStartedAt = null;
+        let demoGpsAccumulatedSeconds = 0;
         const MAX_ACCURACY = 30;
         const STEP_LENGTH_M = 0.75;
         const MET_CLEANUP = 3.5;
@@ -291,6 +297,20 @@
         document.getElementById('gps_toggle').addEventListener('click', async event => {
             const button = event.currentTarget;
             const status = document.getElementById('gps_status');
+            if (eventDemoMode) {
+                if (demoGpsStartedAt !== null) {
+                    demoGpsAccumulatedSeconds += Math.max(0, (Date.now() - demoGpsStartedAt) / 1000);
+                    demoGpsStartedAt = null;
+                    button.textContent = 'デモGPS計測を再開';
+                    status.textContent = `デモGPS計測を一時停止しました（累計 ${Math.floor(demoGpsAccumulatedSeconds)} 秒）。`;
+                } else {
+                    demoGpsStartedAt = Date.now();
+                    button.textContent = 'デモGPS計測を停止';
+                    status.textContent = 'デモGPS計測中（模擬歩数・距離・カロリーを計算しています。実際の位置情報は取得しません）。';
+                }
+                updateGpsMetrics();
+                return;
+            }
             if (gpsWatchId !== null) {
                 navigator.geolocation.clearWatch(gpsWatchId);
                 gpsWatchId = null;
@@ -358,6 +378,13 @@
 
         function handleLiveSubmit(e) {
             updateElapsedTime();
+            if (eventDemoMode) {
+                if (demoGpsStartedAt !== null) {
+                    demoGpsAccumulatedSeconds += Math.max(0, (Date.now() - demoGpsStartedAt) / 1000);
+                    demoGpsStartedAt = null;
+                }
+                document.getElementById('demo_gps_seconds_input').value = String(Math.floor(demoGpsAccumulatedSeconds));
+            }
             if (gpsWatchId !== null) {
                 navigator.geolocation.clearWatch(gpsWatchId);
                 gpsWatchId = null;
@@ -378,3 +405,4 @@
 
 </body>
 </html>
+

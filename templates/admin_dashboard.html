@@ -165,7 +165,7 @@
 
             <div class="stats-grid">
                 <div class="stat-box">
-                    <div class="stat-number">{{ stats.users_today }}</div>
+                    <div class="stat-number">{{ stats.users_total }}</div>
                     <div class="stat-label">登録ユーザー数</div>
                 </div>
 
@@ -184,6 +184,38 @@
                     <div class="stat-label">イベント参加数</div>
                 </div>
             </div>
+        </div>
+
+        <!-- イベント計測設定 -->
+        <div class="card" style="border-left:5px solid {% if event_demo_mode %}var(--danger-red){% else %}var(--primary-green){% endif %};">
+            <h2 class="card-title">⚙️ イベント計測設定</h2>
+            <p>
+                現在の状態：
+                {% if event_demo_mode %}
+                    <strong style="color:var(--danger-red);">デモモード ON</strong>
+                {% else %}
+                    <strong style="color:var(--primary-green);">通常モード OFF</strong>
+                {% endif %}
+            </p>
+            <p style="color:var(--text-muted); line-height:1.7;">
+                ON：開催日前でも計測を開始でき、GPS位置情報の許可なしで疑似歩数・距離・消費カロリーを生成します。最低計測時間は1分です。<br>
+                OFF：開催日時のチェック、実GPS計測、最低15分の通常ルールに戻ります。
+            </p>
+            <form method="POST" action="{{ url_for('admin_event_demo_mode') }}"
+                  onsubmit="return confirm('イベント計測モードを切り替えます。変更してよろしいですか？');"
+                  style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                {% if event_demo_mode %}
+                    <input type="hidden" name="event_demo_mode" value="0">
+                    <button type="submit" class="btn" style="background:#6c757d;">デモモードをOFFにする</button>
+                {% else %}
+                    <input type="hidden" name="event_demo_mode" value="1">
+                    <button type="submit" class="btn">デモモードをONにする</button>
+                {% endif %}
+            </form>
+            <p style="margin-top:14px; color:var(--danger-red); font-size:0.88rem; line-height:1.6;">
+                注意：デモで完了した活動も現在のデータベースに保存され、イベントのポイントも付与されます。実績データと混在しないよう、デモ用イベント・デモ用アカウントで使用してください。疑似GPSは実測値として扱われません。
+            </p>
         </div>
 
         <!-- 特典交換状況 -->

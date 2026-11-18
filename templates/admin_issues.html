@@ -55,10 +55,11 @@
                 <h2>📍 対応状況と環境変化は別々に集計</h2>
                 <p>「対応済み」は作業・処置の完了を示し、地域環境が改善したことを意味しません。現地確認後に環境変化を別途記録してください。</p>
                 <table>
-                    <thead><tr><th>場所・エリア</th><th>報告総数</th><th>未解決</th><th>対応済み</th><th>環境変化（改善 / 変化なし / 悪化 / 再発 / 未確認）</th></tr></thead>
+                    <thead><tr><th>報告区分</th><th>場所・エリア</th><th>報告総数</th><th>未解決</th><th>対応済み</th><th>環境変化（改善 / 変化なし / 悪化 / 再発 / 未確認）</th></tr></thead>
                     <tbody>
                         {% for row in by_location %}
                             <tr>
+                                <td>{{ row.report_type_label }}</td>
                                 <td><strong>{{ row.location }}</strong></td>
                                 <td>{{ row.issue_count }} 件</td>
                                 <td style="color:#b91c1c; font-weight:700;">{{ row.open_count }} 件</td>
@@ -66,14 +67,14 @@
                                 <td>{{ row.improved_count }} / {{ row.unchanged_count }} / {{ row.worsened_count }} / {{ row.recurred_count }} / {{ row.unverified_count }}</td>
                             </tr>
                         {% else %}
-                            <tr><td colspan="4">課題報告データはまだありません。</td></tr>
+                            <tr><td colspan="6">課題報告データはまだありません。</td></tr>
                         {% endfor %}
                     </tbody>
                 </table>
             </section>
 
             <section style="margin:0;">
-                <h2>🗑️ 課題報告・日常ごみ捨ての種類別集計</h2>
+                <h2>🗑️ ごみ・汚れ報告の種類別集計</h2>
                 <table>
                     <thead><tr><th>ごみの種類・課題区分</th><th>課題報告件数</th><th>AI検出数合計</th></tr></thead>
                     <tbody>
@@ -111,29 +112,31 @@
             <p>位置情報付き課題報告について、直線距離で最も近い登録ごみ箱までの距離を、ごみの種類別に集計しています。距離帯は100m以内、100m超〜300m以内、300m超です。登録場所との距離関係を示す記述的な集計で、ごみ箱が原因または解決策であることを示すものではありません。</p>
             <p>座標なし {{ issues_without_coordinates }} 件 · 登録ごみ箱なし {{ issues_without_registered_bins }} 件は距離集計の対象外です。</p>
             <table>
-                <thead><tr><th>報告のごみ種類</th><th>最寄りごみ箱までの距離帯</th><th>報告件数</th><th>平均距離</th></tr></thead>
+                <thead><tr><th>報告区分</th><th>ごみ種類・要望区分</th><th>最寄りごみ箱までの距離帯</th><th>報告件数</th><th>平均距離</th></tr></thead>
                 <tbody>
                     {% for row in bin_proximity_summary %}
                         <tr>
+                            <td>{{ row.report_type_label }}</td>
                             <td>{{ row.trash_type }}</td>
                             <td>{{ row.distance_band }}</td>
                             <td>{{ row.report_count }} 件</td>
                             <td>{{ row.average_distance_m }} m</td>
                         </tr>
                     {% else %}
-                        <tr><td colspan="4">位置情報付き課題報告と登録ごみ箱が揃ったデータはまだありません。</td></tr>
+                        <tr><td colspan="5">位置情報付き課題報告と登録ごみ箱が揃ったデータはまだありません。</td></tr>
                     {% endfor %}
                 </tbody>
             </table>
             {% if issue_bin_proximity %}
                 <h3 style="font-size:14px; margin:16px 0 8px; color:#17633f;">各報告の最寄りごみ箱（最新20件）</h3>
                 <table>
-                    <thead><tr><th>課題・場所</th><th>ごみ種類</th><th>最寄りごみ箱</th><th>距離</th><th>受入種類 / 状態</th></tr></thead>
+                    <thead><tr><th>報告区分</th><th>課題・場所</th><th>ごみ種類・要望区分</th><th>最寄りごみ箱</th><th>距離</th><th>受入種類 / 状態</th></tr></thead>
                     <tbody>
                         {% for row in issue_bin_proximity %}
                             <tr>
+                                <td>{{ row.report_type_label }}</td>
                                 <td><strong>{{ row.title }}</strong><br>{{ row.location }}</td>
-                                <td>{{ row.trash_type }}</td>
+                                <td>{{ row.trash_type or '—' }}</td>
                                 <td>{{ row.nearest_bin_name }}</td>
                                 <td>{{ row.nearest_bin_distance_m }} m</td>
                                 <td>{{ row.nearest_bin_waste_types }} / {{ {'active': '利用可能', 'full_reported': '満杯報告あり', 'maintenance': 'メンテナンス中'}.get(row.nearest_bin_status, row.nearest_bin_status) }}</td>
@@ -145,12 +148,34 @@
         </section>
 
         <section>
+            <h2>🗑️ ごみ箱トラブル報告と対象設備</h2>
+            <p>ごみ箱の満杯・破損報告は、最寄りのごみ箱ではなく、報告時に指定されたごみ箱IDを基準に表示します。</p>
+            <table>
+                <thead><tr><th>報告日時</th><th>対象ごみ箱</th><th>問題</th><th>設備状態</th><th>報告対応状況</th></tr></thead>
+                <tbody>
+                    {% for row in bin_problem_reports %}
+                        <tr>
+                            <td>{{ row.created_at|jst_datetime }}</td>
+                            <td>{{ row.linked_bin_name or row.location }}{% if row.bin_id %}<br><small>ID: {{ row.bin_id }}</small>{% endif %}</td>
+                            <td>{{ {'full': '満杯', 'damaged': '破損'}.get(row.bin_problem_type, '未分類') }}</td>
+                            <td>{{ {'active': '利用可能', 'full_reported': '満杯報告あり', 'maintenance': 'メンテナンス中'}.get(row.linked_bin_status, row.linked_bin_status or '対象設備なし') }}</td>
+                            <td>{{ {'open': '未対応', 'in_progress': '対応中', 'resolved': '対応済み'}.get(row.status, row.status) }}</td>
+                        </tr>
+                    {% else %}
+                        <tr><td colspan="5">ごみ箱トラブルの報告はまだありません。</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </section>
+
+        <section>
             <h2>📈 地域課題の月別推移（直近12か月）</h2>
             <p>報告件数と対応状況、現地確認された環境変化を月ごとに表示します。報告のない月は0件として表示されます。報告月と改善確認月は同一とは限りません。</p>
             <table>
                 <thead>
                     <tr>
                         <th>年月</th>
+                        <th>報告区分</th>
                         <th>報告</th>
                         <th>未対応</th>
                         <th>対応中</th>
@@ -165,6 +190,7 @@
                     {% for row in issue_time_series %}
                         <tr data-month="{{ row.month }}">
                             <td>{{ row.month }}</td>
+                            <td>{{ row.report_type_label }}</td>
                             <td>{{ row.report_count }}</td>
                             <td>{{ row.open_count }}</td>
                             <td>{{ row.in_progress_count }}</td>
@@ -185,6 +211,7 @@
             <table>
                 <thead>
                     <tr>
+                        <th>報告区分</th>
                         <th>場所</th>
                         <th>報告総数</th>
                         <th>初回報告</th>
@@ -199,6 +226,7 @@
                     {% set environment_labels = {'unverified': '未確認', 'improved': '改善を確認', 'unchanged': '変化なし', 'worsened': '悪化', 'recurred': '再発を確認'} %}
                     {% for row in location_recurrence %}
                         <tr>
+                            <td>{{ row.report_type_label }}</td>
                             <td><strong>{{ row.location }}</strong></td>
                             <td>{{ row.report_count }}（再報告 {{ row.repeat_report_count }} 回）</td>
                             <td>{{ row.first_reported_at|jst_datetime }}</td>
@@ -208,7 +236,7 @@
                             <td>{{ issue_status_labels.get(row.latest_status, row.latest_status) }} · {{ environment_labels.get(row.latest_environment_status, '未確認') }}</td>
                         </tr>
                     {% else %}
-                        <tr><td colspan="7">同じ場所からの複数報告はまだありません。</td></tr>
+                        <tr><td colspan="8">同じ場所からの複数報告はまだありません。</td></tr>
                     {% endfor %}
                 </tbody>
             </table>
@@ -222,7 +250,7 @@
                     <tr>
                         <th>ID / 日時</th>
                         <th>タイトル・場所</th>
-                        <th>種類 / 深刻度 / AI推定</th>
+                        <th>報告区分 / 詳細</th>
                         <th>詳細メモ</th>
                         <th>対応状況</th>
                         <th>環境変化の確認</th>
@@ -239,9 +267,18 @@
                                 <small>報告者: {{ issue.reporter_name or 'ユーザー' }}</small>
                             </td>
                             <td>
-                                {{ issue.trash_type }}<br>
-                                深刻度: {{ issue.severity }}<br>
-                                {% if issue.ai_detected_count is not none %}AI検出: {{ issue.ai_detected_count }}個{% endif %}
+                                <strong>{{ report_type_labels.get(issue.report_type, 'その他') }}</strong><br>
+                                {% if issue.report_type == 'litter' %}
+                                    ごみ種類: {{ issue.trash_type }}<br>
+                                    深刻度: {{ issue.severity }}<br>
+                                    AI検出: {{ issue.ai_detected_count if issue.ai_detected_count is not none else '未判定' }}{% if issue.ai_detected_count is not none %} 個{% endif %}
+                                {% elif issue.report_type == 'bin_installation' %}
+                                    設置希望場所: {{ issue.location }}
+                                {% elif issue.report_type == 'bin_problem' %}
+                                    対象ごみ箱: {{ issue.linked_bin_name or issue.location }}<br>
+                                    問題: {{ {'full': '満杯', 'damaged': '破損'}.get(issue.bin_problem_type, '未分類') }}<br>
+                                    ごみ箱状態: {{ {'active': '利用可能', 'full_reported': '満杯報告あり', 'maintenance': 'メンテナンス中'}.get(issue.linked_bin_status, issue.linked_bin_status or '未確認') }}
+                                {% endif %}
                             </td>
                             <td>
                                 {{ issue.description or '—' }}

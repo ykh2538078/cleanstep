@@ -23,6 +23,40 @@
     .mobile-bottom-nav { display: grid; }
     body { padding-bottom: 76px !important; }
     {% endif %}
+    {% if view_mode == 'mobile' %}
+.user-app-actions {
+    display: none;
+}
+
+.user-menu-panel .mobile-menu-actions {
+    display: grid;
+    gap: 8px;
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px solid #dce5e1;
+}
+
+.user-menu-panel .mobile-menu-actions a {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 44px;
+    padding: 10px;
+    border-radius: 8px;
+    text-decoration: none;
+    font-weight: 700;
+}
+
+.user-menu-panel .mobile-menu-actions .notify-link {
+    background: #edf8f1;
+    color: #17633f;
+}
+
+.user-menu-panel .mobile-menu-actions .logout-link {
+    background: #fff1f1;
+    color: #a32626;
+}
+{% endif %}
     @media (prefers-reduced-motion: reduce) { .user-menu-panel { transition: none; } }
 </style>
 <div class="user-app-bar">
@@ -39,6 +73,7 @@
 <button class="user-menu-backdrop" type="button" aria-label="メニューを閉じる" hidden></button>
 <aside class="user-menu-panel" id="user-menu-panel" aria-hidden="true" aria-label="ユーザーメニュー">
     <strong>メニュー</strong>
+
     <nav>
         <a href="{{ url_for('home') }}">🏠 ホーム</a>
         <a href="{{ url_for('regional_map') }}">🗺️ 地域マップ（ゴミ箱・課題・イベント）</a>
@@ -51,8 +86,17 @@
         <a href="{{ url_for('my_reservations') }}">📌 予約したイベント</a>
         <a href="{{ url_for('mypage') }}">📊 マイページ・カレンダー・実績</a>
         <a href="{{ url_for('exchange_page') }}">🎁 特典交換</a>
-        <a href="{{ url_for('user_notifications') }}">🔔 通知{% if unread_notifications %}（未読{{ unread_notifications }}件）{% endif %}</a>
     </nav>
+        {% if view_mode == 'mobile' %}
+<div class="mobile-menu-actions">
+    <a class="notify-link" href="{{ url_for('user_notifications') }}">
+        🔔 通知{% if unread_notifications %}（未読{{ unread_notifications }}件）{% endif %}
+    </a>
+    <a class="logout-link" href="{{ url_for('logout') }}">
+        ログアウト
+    </a>
+</div>
+{% endif %}
 </aside>
 {% if view_mode == 'mobile' %}
 <nav class="mobile-bottom-nav" aria-label="スマホ用クイックナビゲーション">

@@ -261,14 +261,56 @@ def get_user_organization_id(conn, user_id):
 
 
 JST = timezone(timedelta(hours=9))
-EVENT_MIN_DURATION_SECONDS = 15 * 60
+
+# イベント計測デモ設定。
+# 初回のみ従来の環境変数を初期値として取り込み、その後はDBの管理画面設定を優先する。
+EVENT_DEMO_DEFAULT = os.environ.get('CLEANSTEP_EVENT_DEMO_MODE', '0') == '1'
 EVENT_MAX_SESSION_DURATION_SECONDS = 12 * 60 * 60
-EVENT_LOCATION_RADIUS_METERS = 200
-MAX_GPS_WALK_SPEED_MPS = 3.0
-MAX_DEVICE_STEPS_PER_SECOND = 4.0
-MAX_STEP_STRIDE_M = 1.8
-MIN_STEP_DISTANCE_RATIO = 0.5
-GPS_ESTIMATED_STEP_LENGTH_M = 0.75
+
+
+
+def get_event_demo_mode(conn=None):
+    '''DBに保存されたイベントデモ設定を返す。未設定なら従来環境変数を初期値にする。'''
+    owns_connection = conn is None
+    if conn is None:
+        conn = get_db()
+
+    try:
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS app_settings (
+                setting_key TEXT PRIMARY KEY,
+                setting_value TEXT NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        row = conn.execute(
+            'SELECT setting_value FROM app_settings WHERE setting_key = ?',
+            ('event_demo_mode',),
+        ).fetchone()
+
+        if row is None:
+            initial_value = '1' if EVENT_DEMO_DEFAULT else '0'
+
+            conn.execute('''
+                INSERT OR IGNORE INTO app_settings
+                    (setting_key, setting_value)
+                VALUES (?, ?)
+            ''', ('event_demo_mode', initial_value))
+
+            row = conn.execute(
+                'SELECT setting_value FROM app_settings WHERE setting_key = ?',
+                ('event_demo_mode',),
+            ).fetchone()
+
+        if owns_connection:
+            conn.commit()
+
+        return bool(row and row['setting_value'] == '1')
+
+    finally:
+        if owns_connection:
+            conn.close()
 
 
 def parse_event_datetime(value):
@@ -658,7 +700,43 @@ def init_db():
                 conn.execute(
                     f'ALTER TABLE issue_reports ADD COLUMN {column} {definition}'
                 )
-                issue_cols.append(column)
+
+        # 地域課題報告の種別・ごみ箱紐付け。列追加後に一覧を更新し、二重追加を防ぐ。
+        issue_cols = {
+            row['name']
+            for row in conn.execute('PRAGMA table_info(issue_reports)').fetchall()
+        }
+        issue_type_migrations = {
+            'report_type': (
+                "TEXT NOT NULL DEFAULT 'litter' "
+                "CHECK(report_type IN ('litter', 'bin_installation', 'bin_problem'))"
+            ),
+            'bin_id': 'INTEGER REFERENCES trash_bins(id) ON DELETE SET NULL',
+            'bin_problem_type': (
+                "TEXT NOT NULL DEFAULT '' CHECK(bin_problem_type IN ('', 'full', 'damaged'))"
+            ),
+        }
+        for column, definition in issue_type_migrations.items():
+            if column not in issue_cols:
+                conn.execute(
+                    f'ALTER TABLE issue_reports ADD COLUMN {column} {definition}'
+                )
+
+        conn.execute("""
+            UPDATE issue_reports
+            SET report_type = 'bin_problem'
+            WHERE trash_type = 'ごみ箱満杯・破損'
+              AND report_type = 'litter'
+        """)
+
+        conn.execute('''
+            CREATE INDEX IF NOT EXISTS idx_issue_reports_type_created
+            ON issue_reports(report_type, created_at DESC)
+        ''')
+        conn.execute('''
+            CREATE INDEX IF NOT EXISTS idx_issue_reports_bin_id
+            ON issue_reports(bin_id)
+        ''')
 
         conn.execute('''
             CREATE TABLE IF NOT EXISTS improvement_proposals (
@@ -891,6 +969,8 @@ def init_db():
                     CHECK(points_pending >= 0),
                 gps_measured INTEGER NOT NULL DEFAULT 0
                     CHECK(gps_measured IN (0, 1)),
+                gps_simulated INTEGER NOT NULL DEFAULT 0
+                    CHECK(gps_simulated IN (0, 1)),
                 step_source TEXT NOT NULL DEFAULT 'unmeasured'
                     CHECK(step_source IN ('device', 'gps_estimated', 'unmeasured')),
                 detox_duration INTEGER DEFAULT 0,
@@ -976,6 +1056,9 @@ def init_db():
             'calories': 'INTEGER DEFAULT 0',
             'gps_measured': (
                 'INTEGER NOT NULL DEFAULT 0 CHECK(gps_measured IN (0, 1))'
+            ),
+            'gps_simulated': (
+                'INTEGER NOT NULL DEFAULT 0 CHECK(gps_simulated IN (0, 1))'
             ),
             'step_source': (
                 "TEXT NOT NULL DEFAULT 'unmeasured' "
@@ -2679,6 +2762,9 @@ ISSUE_TRASH_TYPES = (
     'ごみ箱満杯・破損',
     'その他',
 )
+ISSUE_LITTER_TYPES = tuple(
+    item for item in ISSUE_TRASH_TYPES if item != 'ごみ箱満杯・破損'
+)
 
 
 @app.route('/map')
@@ -2772,112 +2858,202 @@ def regional_map():
 def issue_report_new():
     user_id = session['user_id']
     form_values = {
+        'report_type': 'litter',
         'title': '',
         'location': '',
         'latitude': '',
         'longitude': '',
-        'trash_type': ISSUE_TRASH_TYPES[0],
+        'trash_type': ISSUE_LITTER_TYPES[0],
         'severity': 'medium',
         'description': '',
+        'bin_id': '',
+        'bin_problem_type': 'full',
     }
     error_msg = None
-    if request.method == 'POST':
-        if not validate_csrf():
-            return 'CSRFトークンが不正です。', 400
-        title = (request.form.get('title') or '').strip()
-        location = (request.form.get('location') or '').strip()
-        raw_lat = (request.form.get('latitude') or '').strip()
-        raw_lng = (request.form.get('longitude') or '').strip()
-        trash_type = (request.form.get('trash_type') or ISSUE_TRASH_TYPES[0]).strip()
-        severity = (request.form.get('severity') or 'medium').strip()
-        description = (request.form.get('description') or '').strip()
-        form_values.update({
-            'title': title,
-            'location': location,
-            'latitude': raw_lat,
-            'longitude': raw_lng,
-            'trash_type': trash_type,
-            'severity': severity,
-            'description': description,
-        })
-        if not title or len(title) > 100:
-            error_msg = '課題のタイトルを1〜100文字で入力してください。'
-        elif not location or len(location) > 200:
-            error_msg = '発見場所（目安）を1〜200文字で入力してください。'
-        elif trash_type not in ISSUE_TRASH_TYPES:
-            error_msg = 'ごみの種類・課題区分を選択してください。'
-        elif severity not in ('low', 'medium', 'high'):
-            error_msg = '状況の深刻度を選択してください。'
-        elif len(description) > 500:
-            error_msg = '詳細メモは500文字以内で入力してください。'
-        else:
+    conn = get_db()
+    try:
+        bins = [
+            dict(row) for row in conn.execute('''
+                SELECT id, name, description, lat, lng, bin_status
+                FROM trash_bins
+                ORDER BY name
+            ''').fetchall()
+        ]
+
+        if request.method == 'POST':
+            if not validate_csrf():
+                return 'CSRFトークンが不正です。', 400
+
+            report_type = (request.form.get('report_type') or 'litter').strip()
+            title = (request.form.get('title') or '').strip()
+            location = (request.form.get('location') or '').strip()
+            raw_lat = (request.form.get('latitude') or '').strip()
+            raw_lng = (request.form.get('longitude') or '').strip()
+            trash_type = (request.form.get('trash_type') or ISSUE_LITTER_TYPES[0]).strip()
+            severity = (request.form.get('severity') or 'medium').strip()
+            description = (request.form.get('description') or '').strip()
+            raw_bin_id = (request.form.get('bin_id') or '').strip()
+            bin_problem_type = (request.form.get('bin_problem_type') or '').strip()
+
+            form_values.update({
+                'report_type': report_type,
+                'title': title,
+                'location': location,
+                'latitude': raw_lat,
+                'longitude': raw_lng,
+                'trash_type': trash_type,
+                'severity': severity,
+                'description': description,
+                'bin_id': raw_bin_id,
+                'bin_problem_type': bin_problem_type or 'full',
+            })
+
+            if report_type not in ('litter', 'bin_installation', 'bin_problem'):
+                error_msg = '報告の種類を選択してください。'
+            elif len(description) > 500:
+                error_msg = '詳細メモは500文字以内で入力してください。'
+
             lat = lng = None
-            if raw_lat or raw_lng:
+            selected_bin = None
+
+            if not error_msg and report_type == 'litter':
+                if not title or len(title) > 100:
+                    error_msg = '課題のタイトルを1〜100文字で入力してください。'
+                elif not location or len(location) > 200:
+                    error_msg = '発見場所（目安）を1〜200文字で入力してください。'
+                elif trash_type not in ISSUE_LITTER_TYPES:
+                    error_msg = 'ごみの種類を選択してください。'
+                elif severity not in ('low', 'medium', 'high'):
+                    error_msg = '状況の深刻度を選択してください。'
+
+            elif not error_msg and report_type == 'bin_installation':
+                if not title or len(title) > 100:
+                    error_msg = '要望のタイトルを1〜100文字で入力してください。'
+                elif not location or len(location) > 200:
+                    error_msg = '設置を希望する場所を1〜200文字で入力してください。'
+                trash_type = 'その他'
+                severity = 'medium'
+
+            elif not error_msg and report_type == 'bin_problem':
                 try:
-                    lat = float(raw_lat)
-                    lng = float(raw_lng)
-                    if (
-                        not math.isfinite(lat)
-                        or not math.isfinite(lng)
-                        or not (-90 <= lat <= 90)
-                        or not (-180 <= lng <= 180)
-                    ):
-                        raise ValueError
-                except ValueError:
-                    error_msg = '位置情報の座標が正しくありません。'
-
-        if not error_msg:
-            image_path = None
-            ai_detected = None
-            file = request.files.get('issue_image')
-            if file and file.filename:
-                if not allowed_file(file.filename):
-                    error_msg = '対応していない画像ファイル形式です。'
+                    bin_id = int(raw_bin_id)
+                except (TypeError, ValueError):
+                    bin_id = None
+                if bin_problem_type not in ('full', 'damaged'):
+                    error_msg = 'ごみ箱の状態を選択してください。'
+                elif bin_id is None:
+                    error_msg = '対象のごみ箱を選択してください。'
                 else:
-                    try:
-                        img = Image.open(file)
-                        img.verify()
-                        file.seek(0)
-                        ext = file.filename.rsplit('.', 1)[1].lower()
-                        unique_filename = f"issue_{uuid.uuid4()}.{ext}"
-                        image_path = os.path.join(UPLOAD_FOLDER, unique_filename)
-                        file.save(image_path)
-                        detector = get_model()
-                        if detector is not None:
-                            results = detector.predict(
-                                image_path, imgsz=640, conf=0.25,
-                                verbose=False, max_det=20,
-                            )
-                            ai_detected = sum(
-                                1
-                                for result in results
-                                for box in result.boxes
-                                if int(box.cls) in (39, 41)
-                            )
-                    except Exception:
-                        app.logger.exception('課題報告画像の検証またはAI推定エラー')
+                    selected_bin = conn.execute('''
+                        SELECT id, name, lat, lng
+                        FROM trash_bins WHERE id = ?
+                    ''', (bin_id,)).fetchone()
+                    if selected_bin is None:
+                        error_msg = '選択したごみ箱が見つかりません。再度選択してください。'
+                    else:
+                        location = selected_bin['name']
+                        lat = selected_bin['lat']
+                        lng = selected_bin['lng']
+                        title = (
+                            f"ごみ箱の{'満杯' if bin_problem_type == 'full' else '破損'}報告："
+                            f"{selected_bin['name']}"
+                        )
+                        trash_type = 'ごみ箱満杯・破損'
+                        severity = 'medium'
 
-        if not error_msg:
-            conn = get_db()
-            try:
+            if not error_msg and report_type in ('litter', 'bin_installation'):
+                if raw_lat or raw_lng:
+                    try:
+                        lat = float(raw_lat)
+                        lng = float(raw_lng)
+                        if (
+                            not math.isfinite(lat)
+                            or not math.isfinite(lng)
+                            or not (-90 <= lat <= 90)
+                            or not (-180 <= lng <= 180)
+                        ):
+                            raise ValueError
+                    except (TypeError, ValueError):
+                        error_msg = '位置情報の座標が正しくありません。'
+
+            if not error_msg:
+                image_path = None
+                ai_detected = None
+                file = request.files.get('issue_image')
+                if file and file.filename:
+                    if not allowed_file(file.filename):
+                        error_msg = '対応していない画像ファイル形式です。'
+                    else:
+                        try:
+                            img = Image.open(file)
+                            img.verify()
+                            file.seek(0)
+                            ext = file.filename.rsplit('.', 1)[1].lower()
+                            unique_filename = f"issue_{uuid.uuid4()}.{ext}"
+                            image_path = os.path.join(UPLOAD_FOLDER, unique_filename)
+                            file.save(image_path)
+                        except Exception:
+                            app.logger.exception('地域課題報告画像の検証または保存エラー')
+                            if image_path and os.path.exists(image_path):
+                                try:
+                                    os.remove(image_path)
+                                except OSError:
+                                    app.logger.warning('報告画像の一時ファイルを削除できませんでした。')
+                            image_path = None
+                            error_msg = '画像を読み取れませんでした。別の画像を選択してください。'
+
+                        if not error_msg and image_path and report_type == 'litter':
+                            try:
+                                detector = get_model()
+                                if detector is not None:
+                                    results = detector.predict(
+                                        image_path, imgsz=640, conf=0.25,
+                                        verbose=False, max_det=20,
+                                    )
+                                    ai_detected = sum(
+                                        1
+                                        for result in results
+                                        for box in result.boxes
+                                        if int(box.cls) in (39, 41)
+                                    )
+                            except Exception:
+                                # AI推定に失敗しても、添付画像と報告自体は保持する。
+                                app.logger.exception('地域課題報告画像のAI推定エラー')
+                                ai_detected = None
+
+            if not error_msg:
                 with conn:
                     issue_cursor = conn.execute('''
                         INSERT INTO issue_reports (
                             user_id, title, location, latitude, longitude,
                             trash_type, severity, description, image_path,
-                            ai_detected_count, status
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')
+                            ai_detected_count, status, report_type, bin_id,
+                            bin_problem_type
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)
                     ''', (
                         user_id, title, location, lat, lng,
                         trash_type, severity, description, image_path,
-                        ai_detected,
+                        ai_detected, report_type,
+                        selected_bin['id'] if selected_bin is not None else None,
+                        bin_problem_type if report_type == 'bin_problem' else '',
                     ))
                     issue_id = issue_cursor.lastrowid
-                    if trash_type == 'ごみ箱満杯・破損':
+
+                    if report_type == 'bin_problem' and selected_bin is not None:
+                        new_bin_status = (
+                            'full_reported' if bin_problem_type == 'full' else 'maintenance'
+                        )
                         conn.execute('''
-                            UPDATE trash_bins SET bin_status = 'full_reported'
-                            WHERE name = ?
-                        ''', (location,))
+                            UPDATE trash_bins
+                            SET bin_status = ?
+                            WHERE id = ?
+                        ''', (new_bin_status, selected_bin['id']))
+
+                    report_label = {
+                        'litter': 'ごみ・汚れ',
+                        'bin_installation': 'ごみ箱の新設要望',
+                        'bin_problem': 'ごみ箱のトラブル',
+                    }[report_type]
                     conn.execute('''
                         INSERT INTO user_notifications (
                             user_id, notification_type, title, message
@@ -2885,19 +3061,21 @@ def issue_report_new():
                     ''', (
                         user_id,
                         f'地域課題を報告しました：{title}',
-                        f'場所：{location}\n種類：{trash_type}\n地域マップに共有されました。',
+                        f'報告種別：{report_label}\\n場所：{location}\\n地域マップに共有されました。',
                     ))
+
                 flash('地域の課題報告を送信しました。地図から清掃イベントや改善提案につなげられます。', 'success')
                 return redirect(url_for('regional_map', issue_id=issue_id))
-            finally:
-                conn.close()
 
-    return render_template(
-        'issue_report.html',
-        form=form_values,
-        trash_types=ISSUE_TRASH_TYPES,
-        error_msg=error_msg,
-    )
+        return render_template(
+            'issue_report.html',
+            form=form_values,
+            trash_types=ISSUE_LITTER_TYPES,
+            bins=bins,
+            error_msg=error_msg,
+        )
+    finally:
+        conn.close()
 
 
 PROPOSAL_TYPES = (
@@ -3103,9 +3281,13 @@ def get_location_grid(latitude, longitude, precision=3):
 
 def _load_regional_issue_analytics(conn, include_personal_info=False):
     issues = conn.execute('''
-        SELECT i.*, CASE WHEN ? THEN u.name ELSE NULL END AS reporter_name
+        SELECT i.*,
+               CASE WHEN ? THEN u.name ELSE NULL END AS reporter_name,
+               b.name AS linked_bin_name,
+               b.bin_status AS linked_bin_status
         FROM issue_reports i
         LEFT JOIN users u ON u.id = i.user_id
+        LEFT JOIN trash_bins b ON b.id = i.bin_id
         ORDER BY CASE i.status WHEN 'open' THEN 0 WHEN 'in_progress' THEN 1 ELSE 2 END,
                  i.id DESC
     ''', (1 if include_personal_info else 0,)).fetchall()
@@ -3117,15 +3299,24 @@ def _load_regional_issue_analytics(conn, include_personal_info=False):
         LEFT JOIN issue_reports i ON i.id = p.issue_report_id
         ORDER BY p.support_count DESC, p.id DESC
     ''', (1 if include_personal_info else 0,)).fetchall()
+    # ごみ種類別集計は「ごみ・汚れ報告」のみを対象にする。
     by_trash_type = conn.execute('''
         SELECT trash_type, COUNT(*) AS count,
                COALESCE(SUM(ai_detected_count), 0) AS ai_total
         FROM issue_reports
+        WHERE report_type = 'litter'
         GROUP BY trash_type
-        ORDER BY count DESC
+        ORDER BY count DESC, trash_type
     ''').fetchall()
     by_location = conn.execute('''
-        SELECT location,
+        SELECT report_type,
+               CASE report_type
+                   WHEN 'litter' THEN 'ごみ・汚れ'
+                   WHEN 'bin_installation' THEN 'ごみ箱の新設要望'
+                   WHEN 'bin_problem' THEN 'ごみ箱のトラブル'
+                   ELSE 'その他'
+               END AS report_type_label,
+               location,
                COUNT(*) AS issue_count,
                SUM(CASE WHEN status = 'resolved' THEN 1 ELSE 0 END) AS resolved_count,
                SUM(CASE WHEN status != 'resolved' THEN 1 ELSE 0 END) AS open_count,
@@ -3135,19 +3326,26 @@ def _load_regional_issue_analytics(conn, include_personal_info=False):
                SUM(CASE WHEN environment_status = 'recurred' THEN 1 ELSE 0 END) AS recurred_count,
                SUM(CASE WHEN environment_status = 'unverified' THEN 1 ELSE 0 END) AS unverified_count
         FROM issue_reports
-        GROUP BY location
-        ORDER BY issue_count DESC, location
+        GROUP BY report_type, location
+        ORDER BY issue_count DESC, report_type, location
     ''').fetchall()
     recurrence_rows = conn.execute('''
         WITH ordered_reports AS (
-            SELECT location, created_at, id, status, environment_status,
+            SELECT report_type, location, created_at, id, status, environment_status,
                    LAG(created_at) OVER (
-                       PARTITION BY location ORDER BY created_at, id
+                       PARTITION BY report_type, location ORDER BY created_at, id
                    ) AS previous_reported_at
             FROM issue_reports
         ),
         recurrence_summary AS (
-            SELECT location,
+            SELECT report_type,
+                   CASE report_type
+                       WHEN 'litter' THEN 'ごみ・汚れ'
+                       WHEN 'bin_installation' THEN 'ごみ箱の新設要望'
+                       WHEN 'bin_problem' THEN 'ごみ箱のトラブル'
+                       ELSE 'その他'
+                   END AS report_type_label,
+                   location,
                    COUNT(*) AS report_count,
                    COUNT(previous_reported_at) AS repeat_report_count,
                    ROUND(AVG(
@@ -3158,14 +3356,15 @@ def _load_regional_issue_analytics(conn, include_personal_info=False):
                    SUM(CASE WHEN environment_status = 'recurred' THEN 1 ELSE 0 END)
                        AS confirmed_recurrence_count
             FROM ordered_reports
-            GROUP BY location
+            GROUP BY report_type, location
             HAVING COUNT(*) > 1
         ),
         latest_reports AS (
-            SELECT location, status AS latest_status,
+            SELECT report_type, location, status AS latest_status,
                    environment_status AS latest_environment_status,
                    ROW_NUMBER() OVER (
-                       PARTITION BY location ORDER BY created_at DESC, id DESC
+                       PARTITION BY report_type, location
+                       ORDER BY created_at DESC, id DESC
                    ) AS row_number
             FROM issue_reports
         )
@@ -3173,7 +3372,9 @@ def _load_regional_issue_analytics(conn, include_personal_info=False):
                latest.latest_environment_status
         FROM recurrence_summary summary
         JOIN latest_reports latest
-          ON latest.location = summary.location AND latest.row_number = 1
+          ON latest.report_type = summary.report_type
+         AND latest.location = summary.location
+         AND latest.row_number = 1
         ORDER BY summary.report_count DESC, summary.last_reported_at DESC
     ''').fetchall()
     current_month = datetime.now(timezone.utc).date().replace(day=1)
@@ -3186,8 +3387,14 @@ def _load_regional_issue_analytics(conn, include_personal_info=False):
             if month_cursor.month == 1
             else month_cursor.replace(month=month_cursor.month - 1)
         )
+    report_type_labels = {
+        'litter': 'ごみ・汚れ',
+        'bin_installation': 'ごみ箱の新設要望',
+        'bin_problem': 'ごみ箱のトラブル',
+    }
     time_series_rows = conn.execute('''
-        SELECT strftime('%Y-%m', created_at) AS month,
+        SELECT report_type,
+               strftime('%Y-%m', created_at) AS month,
                COUNT(*) AS report_count,
                SUM(CASE WHEN status = 'open' THEN 1 ELSE 0 END) AS open_count,
                SUM(CASE WHEN status = 'in_progress' THEN 1 ELSE 0 END) AS in_progress_count,
@@ -3198,24 +3405,32 @@ def _load_regional_issue_analytics(conn, include_personal_info=False):
                SUM(CASE WHEN environment_status = 'recurred' THEN 1 ELSE 0 END) AS recurred_count
         FROM issue_reports
         WHERE created_at >= ?
-        GROUP BY strftime('%Y-%m', created_at)
+        GROUP BY report_type, strftime('%Y-%m', created_at)
     ''', (f'{months[-1]}-01 00:00:00',)).fetchall()
     time_series_by_month = {
-        row['month']: dict(row) for row in time_series_rows if row['month']
+        (row['month'], row['report_type']): dict(row)
+        for row in time_series_rows if row['month']
     }
     issue_time_series = []
     for month_key in reversed(months):
-        issue_time_series.append(time_series_by_month.get(month_key, {
-            'month': month_key,
-            'report_count': 0,
-            'open_count': 0,
-            'in_progress_count': 0,
-            'resolved_count': 0,
-            'improved_count': 0,
-            'unchanged_count': 0,
-            'worsened_count': 0,
-            'recurred_count': 0,
-        }))
+        for report_type, report_type_label in report_type_labels.items():
+            issue_time_series.append(time_series_by_month.get(
+                (month_key, report_type),
+                {
+                    'month': month_key,
+                    'report_type': report_type,
+                    'report_type_label': report_type_label,
+                    'report_count': 0,
+                    'open_count': 0,
+                    'in_progress_count': 0,
+                    'resolved_count': 0,
+                    'improved_count': 0,
+                    'unchanged_count': 0,
+                    'worsened_count': 0,
+                    'recurred_count': 0,
+                }
+            ))
+            issue_time_series[-1].setdefault('report_type_label', report_type_label)
     trash_category_stats = conn.execute('''
         SELECT COALESCE(NULLIF(trash_category, ''), 'ペットボトル・飲料容器') AS category,
                COUNT(*) AS record_count,
@@ -3228,18 +3443,33 @@ def _load_regional_issue_analytics(conn, include_personal_info=False):
     registered_bins = conn.execute('''
         SELECT id, name, lat, lng, waste_types, bin_status
         FROM trash_bins
+        WHERE lat IS NOT NULL AND lng IS NOT NULL
         ORDER BY id
     ''').fetchall()
+    # 最寄りごみ箱との距離比較は、ごみ報告・設置希望だけを対象にする。
+    # ごみ箱トラブルは bin_id で対象設備を特定できるため、別枠で扱う。
     geocoded_issues = conn.execute('''
-        SELECT id, title, location, trash_type, latitude, longitude
+        SELECT id, title, location, trash_type, report_type,
+               latitude, longitude
         FROM issue_reports
-        WHERE latitude IS NOT NULL AND longitude IS NOT NULL
+        WHERE report_type IN ('litter', 'bin_installation')
+          AND latitude IS NOT NULL AND longitude IS NOT NULL
         ORDER BY id DESC
     ''').fetchall()
     issues_without_coordinates = conn.execute('''
         SELECT COUNT(*) FROM issue_reports
-        WHERE latitude IS NULL OR longitude IS NULL
+        WHERE report_type IN ('litter', 'bin_installation')
+          AND (latitude IS NULL OR longitude IS NULL)
     ''').fetchone()[0]
+    bin_problem_reports = conn.execute('''
+        SELECT i.id, i.title, i.location, i.bin_problem_type, i.created_at,
+               i.status, i.bin_id, b.name AS linked_bin_name,
+               b.bin_status AS linked_bin_status
+        FROM issue_reports i
+        LEFT JOIN trash_bins b ON b.id = i.bin_id
+        WHERE i.report_type = 'bin_problem'
+        ORDER BY i.id DESC
+    ''').fetchall()
     proximity_groups = {}
     issue_bin_proximity = []
     issues_without_registered_bins = 0
@@ -3267,8 +3497,10 @@ def _load_regional_issue_analytics(conn, include_personal_info=False):
             label for upper_bound, label in distance_bands
             if nearest_distance <= upper_bound
         )
-        group_key = (issue['trash_type'], band_label)
+        group_key = (issue['report_type'], issue['trash_type'], band_label)
         group = proximity_groups.setdefault(group_key, {
+            'report_type': issue['report_type'],
+            'report_type_label': report_type_labels[issue['report_type']],
             'trash_type': issue['trash_type'],
             'distance_band': band_label,
             'report_count': 0,
@@ -3280,6 +3512,8 @@ def _load_regional_issue_analytics(conn, include_personal_info=False):
             issue_bin_proximity.append({
                 'title': issue['title'],
                 'location': issue['location'],
+                'report_type': issue['report_type'],
+                'report_type_label': report_type_labels[issue['report_type']],
                 'trash_type': issue['trash_type'],
                 'nearest_bin_name': nearest_bin['name'],
                 'nearest_bin_distance_m': round(nearest_distance),
@@ -3297,6 +3531,7 @@ def _load_regional_issue_analytics(conn, include_personal_info=False):
             for group in proximity_groups.values()
         ),
         key=lambda group: (
+            group['report_type'],
             group['trash_type'],
             next(
                 index for index, (_, label) in enumerate(distance_bands)
@@ -3342,6 +3577,8 @@ def _load_regional_issue_analytics(conn, include_personal_info=False):
     return {
         'issues': issues,
         'proposals': proposals,
+        'report_type_labels': report_type_labels,
+        'bin_problem_reports': bin_problem_reports,
         'by_trash_type': by_trash_type,
         'by_location': by_location,
         'location_recurrence': recurrence_rows,
@@ -4334,15 +4571,21 @@ def mark_all_notifications_read():
     finally:
         conn.close()
 
-def _render_event_live(event, started_at, error_msg=None, status=200, selected_role=None):
+def _render_event_live(event, started_at, error_msg=None, status=200, selected_role=None, event_demo_mode=None):
+    if event_demo_mode is None:
+        event_demo_mode = get_event_demo_mode()
+    min_duration_seconds = 60 if event_demo_mode else 15 * 60
     return render_template(
         'event_live.html',
         event=event,
         started_at_epoch=started_at.timestamp() * 1000,
-        min_duration_minutes=EVENT_MIN_DURATION_SECONDS // 60,
+        min_duration_minutes=min_duration_seconds // 60,
+        event_demo_mode=event_demo_mode,
         location_radius_meters=EVENT_LOCATION_RADIUS_METERS,
         location_check_required=(
-            event['latitude'] is not None and event['longitude'] is not None
+            not event_demo_mode
+            and event['latitude'] is not None
+            and event['longitude'] is not None
         ),
         participant_roles=EVENT_PARTICIPANT_ROLES,
         selected_role=selected_role or EVENT_PARTICIPANT_ROLES[0],
@@ -4357,6 +4600,7 @@ def event_live(event_id):
     user_id = session['user_id']
     conn = get_db()
     try:
+        event_demo_mode = get_event_demo_mode(conn)
         event = conn.execute('SELECT * FROM events WHERE id = ?', (event_id,)).fetchone()
         if not event or event['status'] != 'open' or event['review_status'] != 'approved':
             return "エラー：参加可能なイベントが見つかりません。", 404
@@ -4371,7 +4615,8 @@ def event_live(event_id):
             return redirect(url_for('home'))
         
         now = datetime.now(JST)
-        if parse_event_datetime(event['datetime']) > now:
+        # 通常モードでは開催日時前の計測を禁止。デモモードのみ事前実演を許可する。
+        if not event_demo_mode and parse_event_datetime(event['datetime']) > now:
             flash(
                 'イベント開催前のため、活動計測はまだ開始できません。開催日時をご確認ください。',
                 'info',
@@ -4390,7 +4635,8 @@ def event_live(event_id):
             session[started_at_key] = started_at.isoformat()
 
         return _render_event_live(
-            event, started_at, selected_role=reservation['participant_role']
+            event, started_at, selected_role=reservation['participant_role'],
+            event_demo_mode=event_demo_mode,
         )
     except Exception:
         app.logger.exception("イベントライブ画面の表示エラー")
@@ -4405,6 +4651,9 @@ def event_complete(event_id):
     user_id = session['user_id']
     if not validate_csrf():
         return 'CSRFトークンが不正です。', 400
+
+    event_demo_mode = get_event_demo_mode()
+    event_min_duration_seconds = 60 if event_demo_mode else 15 * 60
 
     try:
         duration_val = int(request.form.get('duration', '0'))
@@ -4434,42 +4683,65 @@ def event_complete(event_id):
         return redirect(url_for('event_live', event_id=event_id))
     if elapsed_seconds < duration_val:
         return '実際に経過した時間より長い活動時間は記録できません。', 400
-    gps_data = request.form.get('gps_points')
-    if gps_data:
+    gps_simulated_val = 0
+    if event_demo_mode:
+        # デモ用の模擬計測時間。実GPSデータは受け取らず、サーバー側で値を再計算する。
         try:
-            gps_points = json.loads(gps_data)
-            metrics = calculate_gps_metrics(gps_points, started_at, now)
-        except (json.JSONDecodeError, ValueError) as error:
-            return str(error), 400
-    else:
-        gps_points = []
-        metrics = {
-            'steps': 0, 'distance': 0.0, 'calories': 0,
-            'gps_measured': False, 'validated_points': [],
-        }
-    steps_val = metrics['steps']
-    step_source = 'gps_estimated' if metrics['gps_measured'] else 'unmeasured'
-    device_steps_raw = request.form.get('device_steps', '')
-    if device_steps_raw:
-        try:
-            device_steps = int(device_steps_raw)
+            demo_gps_seconds = int(request.form.get('demo_gps_seconds', '0'))
         except (TypeError, ValueError, OverflowError):
-            device_steps = -1
-        plausible_steps = (
-            0 <= device_steps <= elapsed_seconds * MAX_DEVICE_STEPS_PER_SECOND
-            and (
-                not metrics['gps_measured']
-                or metrics['distance'] * 1000 < 100
-                or device_steps >= (metrics['distance'] * 1000 / MAX_STEP_STRIDE_M * MIN_STEP_DISTANCE_RATIO)
+            return 'デモGPS計測時間の形式が正しくありません。', 400
+        if not (1 <= demo_gps_seconds <= min(int(elapsed_seconds) + 2, 86400)):
+            return 'デモGPS計測を開始してから完了してください。', 400
+        steps_val = int(demo_gps_seconds * 1.2)
+        distance_val = round((steps_val * 0.7) / 1000, 3)
+        calories_val = round(3.5 * 70 * demo_gps_seconds / 3600)
+        metrics = {
+            'steps': steps_val,
+            'distance': distance_val,
+            'calories': calories_val,
+            'gps_measured': False,
+            'validated_points': [],
+        }
+        step_source = 'gps_estimated'
+        gps_simulated_val = 1
+        validated_gps_points = []
+    else:
+        gps_data = request.form.get('gps_points')
+        if gps_data:
+            try:
+                gps_points = json.loads(gps_data)
+                metrics = calculate_gps_metrics(gps_points, started_at, now)
+            except (json.JSONDecodeError, ValueError) as error:
+                return str(error), 400
+        else:
+            gps_points = []
+            metrics = {
+                'steps': 0, 'distance': 0.0, 'calories': 0,
+                'gps_measured': False, 'validated_points': [],
+            }
+        steps_val = metrics['steps']
+        step_source = 'gps_estimated' if metrics['gps_measured'] else 'unmeasured'
+        device_steps_raw = request.form.get('device_steps', '')
+        if device_steps_raw:
+            try:
+                device_steps = int(device_steps_raw)
+            except (TypeError, ValueError, OverflowError):
+                device_steps = -1
+            plausible_steps = (
+                0 <= device_steps <= elapsed_seconds * MAX_DEVICE_STEPS_PER_SECOND
+                and (
+                    not metrics['gps_measured']
+                    or metrics['distance'] * 1000 < 100
+                    or device_steps >= (metrics['distance'] * 1000 / MAX_STEP_STRIDE_M * MIN_STEP_DISTANCE_RATIO)
+                )
             )
-        )
-        if plausible_steps:
-            steps_val = device_steps
-            step_source = 'device'
-    distance_val = metrics['distance']
-    calories_val = metrics['calories']
+            if plausible_steps:
+                steps_val = device_steps
+                step_source = 'device'
+        distance_val = metrics['distance']
+        calories_val = metrics['calories']
+        validated_gps_points = metrics['validated_points']
     gps_measured_val = int(metrics['gps_measured'])
-    validated_gps_points = metrics['validated_points']
 
     conn = None
     try:
@@ -4485,7 +4757,8 @@ def event_complete(event_id):
         if not event or event['status'] != 'open' or event['review_status'] != 'approved':
             conn.close()
             return "エラー：参加可能なイベントが見つかりません。", 404
-        if parse_event_datetime(event['datetime']) > datetime.now(JST):
+        # 通常モードでは開催日時前の完了を禁止。デモモードのみ事前実演を許可する。
+        if not event_demo_mode and parse_event_datetime(event['datetime']) > datetime.now(JST):
             conn.close()
             flash(
                 'イベント開催前のため、活動は完了できません。開催日時をご確認ください。',
@@ -4500,19 +4773,21 @@ def event_complete(event_id):
             conn.close()
             return '計測を完了するにはイベント予約が必要です。', 403
 
-        if elapsed_seconds < EVENT_MIN_DURATION_SECONDS:
+        if elapsed_seconds < event_min_duration_seconds:
             conn.close()
-            minimum_minutes = EVENT_MIN_DURATION_SECONDS // 60
+            minimum_minutes = event_min_duration_seconds // 60
             return _render_event_live(
                 event,
                 started_at,
                 error_msg=f'イベント完了には最低{minimum_minutes}分間の活動計測が必要です。計測を続けてください。',
                 status=400,
                 selected_role=reservation['participant_role'],
+                event_demo_mode=event_demo_mode,
             )
         verified_duration = min(int(elapsed_seconds), 86400)
         location_configured = (
-            event['latitude'] is not None or event['longitude'] is not None
+            not event_demo_mode
+            and (event['latitude'] is not None or event['longitude'] is not None)
         )
         if location_configured:
             if event['latitude'] is None or event['longitude'] is None:
@@ -4552,6 +4827,7 @@ def event_complete(event_id):
                     ),
                     status=400,
                     selected_role=reservation['participant_role'],
+                    event_demo_mode=event_demo_mode,
                 )
 
         bonus_points = event['bonus_points']
@@ -4576,10 +4852,10 @@ def event_complete(event_id):
                 INSERT INTO activity_history (
                     user_id, event_id, type, title,
                     duration, steps, distance, calories, gps_measured,
-                    step_source, detox_duration, points_earned,
+                    gps_simulated, step_source, detox_duration, points_earned,
                     participant_role, before_state, after_state
                 )
-                VALUES (?, ?, 'event', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, 'event', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 user_id,
                 event_id,
@@ -4589,6 +4865,7 @@ def event_complete(event_id):
                 distance_val,
                 calories_val,
                 gps_measured_val,
+                gps_simulated_val,
                 step_source,
                 detox_val,
                 bonus_points,
@@ -4828,9 +5105,49 @@ def admin_dashboard():
                 (SELECT COUNT(*) FROM reward_history
                  WHERE date(created_at, '+9 hours') = date('now', '+9 hours')) AS total_rewards
         ''').fetchone()
-        return render_template('admin_dashboard.html', stats=stats)
+        event_demo_mode = get_event_demo_mode(conn)
+        return render_template(
+            'admin_dashboard.html',
+            stats=stats,
+            event_demo_mode=event_demo_mode,
+        )
     finally:
         conn.close()
+
+
+@app.route('/admin/settings/event-demo-mode', methods=['POST'])
+@admin_required
+def admin_event_demo_mode():
+    if not validate_csrf():
+        return 'CSRFトークンが不正です。', 400
+
+    raw_value = request.form.get('event_demo_mode', '0')
+    if raw_value not in ('0', '1'):
+        return 'デモモードの設定値が正しくありません。', 400
+
+    conn = get_db()
+    try:
+        get_event_demo_mode(conn)  # 設定テーブルと初期値を保証
+        with conn:
+            conn.execute('''
+                UPDATE app_settings
+                SET setting_value = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE setting_key = 'event_demo_mode'
+            ''', (raw_value,))
+    finally:
+        conn.close()
+
+    if raw_value == '1':
+        flash(
+            'イベントデモモードをONにしました。開催日前の計測と疑似GPS計測が有効です。',
+            'warning',
+        )
+    else:
+        flash(
+            'イベントデモモードをOFFにしました。通常の開催日時・GPS・15分条件に戻りました。',
+            'success',
+        )
+    return redirect(url_for('admin_dashboard'))
 
 
 @app.route('/admin/feedback')

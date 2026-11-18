@@ -15,18 +15,20 @@
         label { display: block; font-weight: 700; font-size: 14px; margin: 14px 0 6px; color: #34495e; }
         input[type="text"], select, textarea, input[type="file"] { width: 100%; box-sizing: border-box; padding: 12px; border: 1px solid #ccd6d2; border-radius: 8px; font: inherit; font-size: 15px; background: #fcfcfc; }
         textarea { min-height: 90px; resize: vertical; }
-        .gps-row { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+        .gps-row { display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
         .gps-btn { padding: 10px 14px; border: 1px solid #257a52; border-radius: 8px; background: #eef7f1; color: #17633f; font-weight: 700; font-size: 13px; cursor: pointer; white-space: nowrap; }
         .coords-hint { font-size: 12px; color: #64748b; margin-top: 6px; }
         .error-message { padding: 12px 14px; margin-bottom: 16px; border: 1px solid #f1b9b5; border-radius: 8px; background: #fff0ef; color: #8f241f; }
         .submit-btn { width: 100%; padding: 16px; border: 0; border-radius: 28px; background: linear-gradient(135deg, #e67e22, #d35400); color: #fff; font-size: 16px; font-weight: 700; cursor: pointer; box-shadow: 0 6px 15px rgba(230,126,34,.28); }
+        .hint-box { padding: 11px 13px; border-radius: 8px; background: #f5f8fa; color: #52616b; font-size: 13px; line-height: 1.6; margin-top: 10px; }
+        [hidden] { display: none !important; }
     </style>
 </head>
 <body data-view-mode="{{ view_mode }}">
     {% include "_user_navigation.html" %}
     <div class="header">
         <h1>🚩 地域のゴミ・課題を報告</h1>
-        <p>写真と位置情報で地域のゴミ問題を共有し、清掃活動や環境改善につなげます</p>
+        <p>地域の状況を共有し、ごみ箱の配置や清掃活動などの環境改善につなげます</p>
     </div>
     {% include "_user_page_back.html" %}
 
@@ -38,16 +40,20 @@
             {% endif %}
 
             <section class="card">
-                <h2>1. 現場の写真（任意・AI自動カウント対応）</h2>
-                <label for="issue_image">写真を撮影または選択</label>
-                <input type="file" id="issue_image" name="issue_image" accept="image/*">
-                <p class="coords-hint">写真を添付すると、AIがペットボトル・容器類の個数を自動で推定して記録します。</p>
+                <h2>1. 報告する内容</h2>
+                <label for="report_type">報告の種類</label>
+                <select id="report_type" name="report_type">
+                    <option value="litter" {% if form.report_type == 'litter' %}selected{% endif %}>ごみ・汚れを見つけた</option>
+                    <option value="bin_installation" {% if form.report_type == 'bin_installation' %}selected{% endif %}>ごみ箱を新しく設置してほしい</option>
+                    <option value="bin_problem" {% if form.report_type == 'bin_problem' %}selected{% endif %}>設置済みごみ箱の満杯・破損</option>
+                </select>
+                <div class="hint-box">報告内容に合わせて入力項目が切り替わります。ごみ箱の新設要望と、設置済みごみ箱のトラブルは別々に記録します。</div>
             </section>
 
-            <section class="card">
-                <h2>2. 発見した場所・位置情報</h2>
-                <label for="location">場所の名称・目安（必須）</label>
-                <input type="text" id="location" name="location" maxlength="200" required placeholder="例：〇〇駅 北口ロータリー自販機横" value="{{ form.location }}">
+            <section class="card" id="location-card">
+                <h2>2. 場所・位置情報</h2>
+                <label for="location" id="location-label">発見した場所（必須）</label>
+                <input type="text" id="location" name="location" maxlength="200" placeholder="例：〇〇駅 北口ロータリー自販機横" value="{{ form.location }}">
                 <div class="gps-row">
                     <button type="button" class="gps-btn" id="get-gps-btn">📍 現在地（GPS）を自動取得</button>
                     <span id="gps-status" class="coords-hint">
@@ -58,26 +64,60 @@
                 <input type="hidden" id="longitude" name="longitude" value="{{ form.longitude }}">
             </section>
 
-            <section class="card">
-                <h2>3. ゴミの種類と状況</h2>
-                <label for="title">課題のタイトル（必須）</label>
-                <input type="text" id="title" name="title" maxlength="100" required placeholder="例：駅前の植え込みにペットボトルが散乱" value="{{ form.title }}">
+            <section class="card" id="bin-card" hidden>
+                <h2>2. 対象のごみ箱</h2>
+                <label for="bin_id">報告するごみ箱</label>
+                <select id="bin_id" name="bin_id">
+                    <option value="">ごみ箱を選択してください</option>
+                    {% for bin in bins %}
+                        <option value="{{ bin.id }}" {% if form.bin_id|string == bin.id|string %}selected{% endif %}>
+                            {{ bin.name }}{% if bin.bin_status == 'full_reported' %}（満杯報告あり）{% elif bin.bin_status == 'maintenance' %}（メンテナンス中）{% endif %}
+                        </option>
+                    {% endfor %}
+                </select>
+                {% if not bins %}
+                    <p class="hint-box">現在、報告対象として選択できる登録済みごみ箱がありません。</p>
+                {% else %}
+                    <p class="coords-hint">登録済みごみ箱から選択してください。場所と位置情報は登録データを使用します。</p>
+                {% endif %}
+                <label for="bin_problem_type">ごみ箱の状態</label>
+                <select id="bin_problem_type" name="bin_problem_type">
+                    <option value="full" {% if form.bin_problem_type == 'full' %}selected{% endif %}>ごみ箱が満杯</option>
+                    <option value="damaged" {% if form.bin_problem_type == 'damaged' %}selected{% endif %}>ごみ箱が破損・故障</option>
+                </select>
+            </section>
 
-                <label for="trash_type">ゴミの種類・課題区分</label>
+            <section class="card" id="litter-card">
+                <h2>3. ごみ・汚れの状況</h2>
+                <label for="title">課題のタイトル（必須）</label>
+                <input type="text" id="title" name="title" maxlength="100" placeholder="例：駅前の植え込みにペットボトルが散乱" value="{{ form.title }}">
+                <label for="trash_type">ごみの種類</label>
                 <select id="trash_type" name="trash_type">
                     {% for t in trash_types %}
                         <option value="{{ t }}" {% if form.trash_type == t %}selected{% endif %}>{{ t }}</option>
                     {% endfor %}
                 </select>
-
                 <label for="severity">状況・量</label>
                 <select id="severity" name="severity">
                     <option value="low" {% if form.severity == 'low' %}selected{% endif %}>少量（数個程度）</option>
                     <option value="medium" {% if form.severity == 'medium' %}selected{% endif %}>目立つ（袋1つ分程度・散乱）</option>
                     <option value="high" {% if form.severity == 'high' %}selected{% endif %}>多量・緊急（清掃イベントや回収が必要）</option>
                 </select>
+            </section>
 
-                <label for="description">気づいたこと・原因の推測（任意）</label>
+            <section class="card" id="installation-card" hidden>
+                <h2>3. ごみ箱の新設要望</h2>
+                <label for="installation-title">要望のタイトル（必須）</label>
+                <input type="text" id="installation-title" name="title" maxlength="100" placeholder="例：公園入口付近にごみ箱を設置してほしい" value="{{ form.title }}" disabled>
+                <p class="hint-box">ごみ箱が必要だと感じた理由や、設置してほしい場所を入力してください。要望として記録し、既存のごみ箱情報とは分けて管理します。</p>
+            </section>
+
+            <section class="card">
+                <h2>4. 写真・補足情報</h2>
+                <label for="issue_image">現場の写真（任意）</label>
+                <input type="file" id="issue_image" name="issue_image" accept="image/*">
+                <p class="coords-hint" id="image-hint">ごみ・汚れの報告では、写真からAIが対象物の個数を推定します。AIの推定値は確定値ではありません。</p>
+                <label for="description" id="description-label">気づいたこと・原因の推測（任意）</label>
                 <textarea id="description" name="description" maxlength="500" placeholder="例：近くにゴミ箱がなく、夜間によく捨てられているようです">{{ form.description }}</textarea>
             </section>
 
@@ -87,31 +127,85 @@
 
     <script>
         (() => {
-            const btn = document.getElementById('get-gps-btn');
-            const status = document.getElementById('gps-status');
-            const latInput = document.getElementById('latitude');
-            const lngInput = document.getElementById('longitude');
-            if (!btn) return;
-            btn.addEventListener('click', () => {
-                if (!navigator.geolocation) {
-                    status.textContent = 'お使いのブラウザでは位置情報を取得できません。';
-                    return;
+            const typeSelect = document.getElementById('report_type');
+            const locationCard = document.getElementById('location-card');
+            const binCard = document.getElementById('bin-card');
+            const litterCard = document.getElementById('litter-card');
+            const installationCard = document.getElementById('installation-card');
+            const locationInput = document.getElementById('location');
+            const titleInput = document.getElementById('title');
+            const installationTitle = document.getElementById('installation-title');
+            const binInput = document.getElementById('bin_id');
+            const gpsButton = document.getElementById('get-gps-btn');
+            const imageHint = document.getElementById('image-hint');
+            const locationLabel = document.getElementById('location-label');
+            const descriptionLabel = document.getElementById('description-label');
+
+            function setPanel(panel, visible) {
+                panel.hidden = !visible;
+                panel.querySelectorAll('input, select, textarea, button').forEach(control => {
+                    if (control.type !== 'file') control.disabled = !visible;
+                });
+            }
+
+            function updateForm() {
+                const type = typeSelect.value;
+                const isLitter = type === 'litter';
+                const isInstallation = type === 'bin_installation';
+                const isBinProblem = type === 'bin_problem';
+
+                setPanel(locationCard, !isBinProblem);
+                setPanel(binCard, isBinProblem);
+                setPanel(litterCard, isLitter);
+                setPanel(installationCard, isInstallation);
+
+                locationInput.required = !isBinProblem;
+                titleInput.required = isLitter;
+                installationTitle.required = isInstallation;
+                binInput.required = isBinProblem;
+
+                if (isInstallation) {
+                    locationLabel.textContent = 'ごみ箱を設置してほしい場所（必須）';
+                    imageHint.textContent = '設置を希望する場所の写真があれば添付してください。AIによるごみ個数の推定は行いません。';
+                    descriptionLabel.textContent = '設置が必要だと思う理由（任意）';
+                } else if (isBinProblem) {
+                    imageHint.textContent = 'ごみ箱の状態が分かる写真を添付できます。AIによるごみ個数の推定は行いません。';
+                    descriptionLabel.textContent = '詳しい状況・補足（任意）';
+                } else {
+                    locationLabel.textContent = '発見した場所（必須）';
+                    imageHint.textContent = '写真を添付すると、AIがペットボトル・容器類の個数を推定して記録します。AIの推定値は確定値ではありません。';
+                    descriptionLabel.textContent = '気づいたこと・原因の推測（任意）';
                 }
-                status.textContent = '現在地を取得中...';
-                navigator.geolocation.getCurrentPosition(
-                    pos => {
-                        const lat = pos.coords.latitude.toFixed(6);
-                        const lng = pos.coords.longitude.toFixed(6);
-                        latInput.value = lat;
-                        lngInput.value = lng;
-                        status.textContent = `取得完了 (${lat}, ${lng})`;
-                    },
-                    () => {
-                        status.textContent = '位置情報を取得できませんでした。場所の名称を入力してください。';
-                    },
-                    { enableHighAccuracy: true, timeout: 8000 }
-                );
-            });
+            }
+
+            typeSelect.addEventListener('change', updateForm);
+            updateForm();
+
+            if (gpsButton) {
+                gpsButton.addEventListener('click', () => {
+                    const status = document.getElementById('gps-status');
+                    const latInput = document.getElementById('latitude');
+                    const lngInput = document.getElementById('longitude');
+                    if (!navigator.geolocation) {
+                        status.textContent = 'お使いのブラウザでは位置情報を取得できません。';
+                        return;
+                    }
+                    status.textContent = '現在地を取得中...';
+                    navigator.geolocation.getCurrentPosition(
+                        pos => {
+                            const lat = pos.coords.latitude.toFixed(6);
+                            const lng = pos.coords.longitude.toFixed(6);
+                            latInput.value = lat;
+                            lngInput.value = lng;
+                            status.textContent = `取得完了 (${lat}, ${lng})`;
+                        },
+                        () => {
+                            status.textContent = '位置情報を取得できませんでした。場所の名称を入力してください。';
+                        },
+                        { enableHighAccuracy: true, timeout: 8000 }
+                    );
+                });
+            }
         })();
     </script>
 </body>
