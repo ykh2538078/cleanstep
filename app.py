@@ -2880,6 +2880,34 @@ def issue_report_new():
             ''').fetchall()
         ]
 
+        if request.method == 'GET':
+            requested_report_type = (
+                request.args.get('report_type') or 'litter'
+            ).strip()
+
+            if requested_report_type in (
+                'litter', 'bin_installation', 'bin_problem'
+            ):
+                form_values['report_type'] = requested_report_type
+
+            if requested_report_type == 'bin_problem':
+                requested_bin_id = request.args.get('bin_id', type=int)
+                requested_problem_type = (
+                    request.args.get('bin_problem_type') or 'full'
+                ).strip()
+
+                if requested_problem_type not in ('full', 'damaged'):
+                    requested_problem_type = 'full'
+
+                if requested_bin_id is not None and any(
+                    bin_data['id'] == requested_bin_id
+                    for bin_data in bins
+                ):
+                    form_values.update({
+                        'bin_id': str(requested_bin_id),
+                        'bin_problem_type': requested_problem_type,
+                    })
+
         if request.method == 'POST':
             if not validate_csrf():
                 return 'CSRFトークンが不正です。', 400

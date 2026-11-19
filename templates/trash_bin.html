@@ -166,11 +166,39 @@
         </form>
     </div>
 
+    <div style="margin: 15px 0 25px 0; text-align: center;">
+        <a
+            id="bin-problem-report-link"
+            href="{{ url_for('issue_report_new', report_type='bin_problem', bin_id=selected_bin_id) }}"
+            class="btn-submit"
+            style="display: inline-block; text-decoration: none; background: #e67e22;"
+        >
+            ⚠️ このごみ箱の満杯・破損を報告
+        </a>
+    </div>
+
     <!-- 📸 フロントエンド用の画像プレビュー軽量スクリプト（UX維持） -->
     <script>
         const binSelect = document.getElementById('bin_id');
+        const reportLink = document.getElementById('bin-problem-report-link');
+
+        function updateBinReportLink() {
+            if (!binSelect || !reportLink || !binSelect.value) return;
+
+            const params = new URLSearchParams({
+                report_type: 'bin_problem',
+                bin_id: binSelect.value
+            });
+
+            reportLink.href = `{{ url_for('issue_report_new') }}?${params.toString()}`;
+        }
+
+        updateBinReportLink();
+
         if (binSelect && binSelect.options.length) {
             binSelect.addEventListener('change', () => {
+                updateBinReportLink();
+
                 const option = binSelect.selectedOptions[0];
                 const lat = Number(option.dataset.lat);
                 const lng = Number(option.dataset.lng);
@@ -185,10 +213,12 @@
                 const marker = `${lat.toFixed(7)},${lng.toFixed(7)}`;
                 const mapFrame = document.querySelector('#selected-bin-map iframe');
                 const mapLink = document.getElementById('bin-map-link');
+
                 if (mapFrame) {
                     mapFrame.src = `https://www.openstreetmap.org/export/embed.html?bbox=${bbox}&layer=mapnik&marker=${marker}`;
                     mapFrame.title = `${option.textContent.trim()} の設置場所`;
                 }
+
                 if (mapLink) {
                     mapLink.href = `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lng}#map=17/${lat}/${lng}`;
                 }
