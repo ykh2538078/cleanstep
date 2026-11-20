@@ -6,7 +6,7 @@
     .user-page-back { display: inline-flex; min-height: 38px; box-sizing: border-box; align-items: center; padding: 0 12px; border: 1px solid rgba(44,62,80,.2); border-radius: 8px; background: rgba(255,255,255,.92); color: #2c3e50; text-decoration: none; font-size: 13px; font-weight: 700; }
     .user-app-actions { display: flex; align-items: center; gap: 8px; pointer-events: auto; }
     .user-menu-toggle { width: 42px; height: 42px; border: 1px solid rgba(44,62,80,.2); border-radius: 8px; background: rgba(255,255,255,.92); color: #2c3e50; font-size: 23px; cursor: pointer; }
-    .user-app-notify { display: inline-flex; min-height: 42px; box-sizing: border-box; align-items: center; gap: 6px; padding: 0 12px; border: 1px solid rgba(39,174,96,.3); border-radius: 8px; background: rgba(255,255,255,.95); color: #17633f; text-decoration: none; font-size: 13px; font-weight: 700; box-shadow: 0 2px 6px rgba(0,0,0,.08); }
+    .user-app-notify { display: inline-flex; min-height: 42px; box-sizing: border-box; align-items: center; gap: 6px; padding: 0 12px; border: 1px solid rgba(39,174,96,.3); border-radius: 8px; background: rgba(255,255,255,.95); color: #17633f; text-decoration: none; font-size: 13px; font-weight: 700; box-shadow: 0 2px 6px rgba(0,0,0,.08); cursor: pointer; }
     .user-app-notify-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; background: #e74c3c; color: #fff; font-size: 11px; font-weight: 700; }
     .user-app-logout { display: inline-flex; min-height: 42px; box-sizing: border-box; align-items: center; padding: 0 12px; border-radius: 8px; background: rgba(255,255,255,.92); color: #a32626; text-decoration: none; font-size: 13px; font-weight: 700; }
     .user-menu-panel { position: fixed; inset: 0 auto 0 0; z-index: 1002; width: min(320px, 85vw); max-height: 100vh; max-height: 100dvh; box-sizing: border-box; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; padding: 20px 20px 88px; background: #fff; box-shadow: 4px 0 18px rgba(0,0,0,.18); transform: translateX(-105%); transition: transform .2s ease; }
@@ -19,54 +19,236 @@
     .mobile-bottom-nav a { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; padding: 6px 2px; color: #475569; text-decoration: none; font-size: 11px; font-weight: 700; border-radius: 8px; }
     .mobile-bottom-nav a:hover, .mobile-bottom-nav a.active { color: #17633f; background: #f0fdf4; }
     .mobile-bottom-nav .nav-icon { font-size: 18px; line-height: 1; }
+
+    /* 通知ドロップダウンボックス */
+    .user-notify-popover {
+        position: fixed;
+        top: 58px;
+        right: 12px;
+        width: 380px;
+        max-width: calc(100vw - 24px);
+        background: #fff;
+        border-radius: 12px;
+        border: 1px solid #dce5e1;
+        box-shadow: 0 12px 36px rgba(0,0,0,0.18), 0 2px 8px rgba(0,0,0,0.06);
+        z-index: 1005;
+        display: none;
+        flex-direction: column;
+        overflow: hidden;
+        pointer-events: auto;
+        animation: notifyFadeIn 0.16s ease-out;
+    }
+    @keyframes notifyFadeIn {
+        from { opacity: 0; transform: translateY(-8px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+    .user-notify-popover[aria-hidden="false"] {
+        display: flex;
+    }
+    .notify-popover-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 12px 16px;
+        border-bottom: 1px solid #edf2ef;
+        background: #fafcfb;
+    }
+    .notify-popover-title {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-weight: 700;
+        font-size: 14px;
+        color: #1e293b;
+    }
+    .notify-popover-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 2px 7px;
+        border-radius: 999px;
+        background: #e74c3c;
+        color: #fff;
+        font-size: 11px;
+        font-weight: 700;
+    }
+    .notify-popover-close {
+        border: 0;
+        background: transparent;
+        color: #64748b;
+        font-size: 16px;
+        cursor: pointer;
+        padding: 4px 8px;
+        border-radius: 6px;
+        line-height: 1;
+    }
+    .notify-popover-close:hover {
+        background: #e2e8f0;
+        color: #1e293b;
+    }
+    .notify-popover-body {
+        max-height: 380px;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+    }
+    .notify-popover-loading, .notify-popover-empty {
+        padding: 32px 16px;
+        text-align: center;
+        color: #64748b;
+        font-size: 13px;
+    }
+    .notify-popover-item {
+        display: block;
+        padding: 12px 14px;
+        border-bottom: 1px solid #f1f5f3;
+        text-decoration: none;
+        color: inherit;
+        transition: background 0.15s ease;
+        cursor: pointer;
+    }
+    .notify-popover-item:last-child {
+        border-bottom: none;
+    }
+    .notify-popover-item:hover {
+        background: #f8faf9;
+    }
+    .notify-popover-item.unread {
+        border-left: 4px solid #257a52;
+        background: #f4faf6;
+    }
+    .notify-popover-item.unread:hover {
+        background: #ebf5ee;
+    }
+    .notify-item-title {
+        font-size: 13px;
+        font-weight: 700;
+        color: #1e293b;
+        margin-bottom: 4px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 6px;
+    }
+    .notify-item-badge {
+        font-size: 10px;
+        font-weight: 700;
+        color: #fff;
+        background: #257a52;
+        padding: 1px 6px;
+        border-radius: 8px;
+        flex-shrink: 0;
+    }
+    .notify-item-msg {
+        font-size: 12px;
+        color: #475569;
+        line-height: 1.5;
+        white-space: pre-line;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .notify-item-footer {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-top: 6px;
+        font-size: 11px;
+    }
+    .notify-item-time {
+        color: #94a3b8;
+    }
+    .notify-item-action {
+        color: #257a52;
+        font-weight: 700;
+    }
+    .notify-popover-footer {
+        padding: 10px 14px;
+        border-top: 1px solid #edf2ef;
+        background: #fafcfb;
+        text-align: center;
+    }
+    .notify-popover-all-link {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 4px;
+        width: 100%;
+        box-sizing: border-box;
+        padding: 9px 12px;
+        border-radius: 8px;
+        background: #257a52;
+        color: #fff;
+        font-size: 13px;
+        font-weight: 700;
+        text-decoration: none;
+        transition: background 0.15s ease;
+    }
+    .notify-popover-all-link:hover {
+        background: #1e6342;
+    }
+    .user-notify-backdrop {
+        position: fixed;
+        inset: 0;
+        z-index: 1004;
+        border: 0;
+        background: rgba(15,23,42,.25);
+    }
+    .user-notify-backdrop[hidden] {
+        display: none;
+    }
+
     {% if view_mode == 'mobile' %}
     .mobile-bottom-nav { display: grid; }
     body { padding-bottom: 76px !important; }
+    .user-app-actions {
+        display: none;
+    }
+    .user-notify-popover {
+        top: 60px;
+        right: 12px;
+        left: 12px;
+        width: auto;
+        max-width: 420px;
+        margin: 0 auto;
+    }
+    .user-menu-panel .mobile-menu-actions {
+        display: grid;
+        gap: 8px;
+        margin-top: 16px;
+        padding-top: 16px;
+        border-top: 1px solid #dce5e1;
+    }
+    .user-menu-panel .mobile-menu-actions a {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 44px;
+        padding: 10px;
+        border-radius: 8px;
+        text-decoration: none;
+        font-weight: 700;
+    }
+    .user-menu-panel .mobile-menu-actions .notify-link {
+        background: #edf8f1;
+        color: #17633f;
+    }
+    .user-menu-panel .mobile-menu-actions .logout-link {
+        background: #fff1f1;
+        color: #a32626;
+    }
     {% endif %}
-    {% if view_mode == 'mobile' %}
-.user-app-actions {
-    display: none;
-}
-
-.user-menu-panel .mobile-menu-actions {
-    display: grid;
-    gap: 8px;
-    margin-top: 16px;
-    padding-top: 16px;
-    border-top: 1px solid #dce5e1;
-}
-
-.user-menu-panel .mobile-menu-actions a {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    min-height: 44px;
-    padding: 10px;
-    border-radius: 8px;
-    text-decoration: none;
-    font-weight: 700;
-}
-
-.user-menu-panel .mobile-menu-actions .notify-link {
-    background: #edf8f1;
-    color: #17633f;
-}
-
-.user-menu-panel .mobile-menu-actions .logout-link {
-    background: #fff1f1;
-    color: #a32626;
-}
-{% endif %}
-    @media (prefers-reduced-motion: reduce) { .user-menu-panel { transition: none; } }
+    @media (prefers-reduced-motion: reduce) { .user-menu-panel, .user-notify-popover { transition: none; animation: none; } }
 </style>
 <div class="user-app-bar">
     <div class="user-app-left">
         <button class="user-menu-toggle" type="button" aria-label="メニューを開く" aria-expanded="false" aria-controls="user-menu-panel">☰</button>
     </div>
     <div class="user-app-actions">
-        <a class="user-app-notify" href="{{ url_for('user_notifications') }}" aria-label="通知一覧">
+        <button class="user-app-notify" type="button" aria-label="通知ボックスを開く" aria-haspopup="dialog" aria-expanded="false">
             🔔 通知{% if unread_notifications %}<span class="user-app-notify-badge">{{ unread_notifications }}</span>{% endif %}
-        </a>
+        </button>
         <a class="user-app-logout" href="{{ url_for('logout') }}">ログアウト</a>
     </div>
 </div>
@@ -87,17 +269,38 @@
         <a href="{{ url_for('mypage') }}">📊 マイページ・カレンダー・実績</a>
         <a href="{{ url_for('exchange_page') }}">🎁 特典交換</a>
     </nav>
-        {% if view_mode == 'mobile' %}
-<div class="mobile-menu-actions">
-    <a class="notify-link" href="{{ url_for('user_notifications') }}">
-        🔔 通知{% if unread_notifications %}（未読{{ unread_notifications }}件）{% endif %}
-    </a>
-    <a class="logout-link" href="{{ url_for('logout') }}">
-        ログアウト
-    </a>
-</div>
-{% endif %}
+    {% if view_mode == 'mobile' %}
+    <div class="mobile-menu-actions">
+        <a class="notify-link" href="{{ url_for('user_notifications') }}">
+            🔔 通知{% if unread_notifications %}（未読{{ unread_notifications }}件）{% endif %}
+        </a>
+        <a class="logout-link" href="{{ url_for('logout') }}">
+            ログアウト
+        </a>
+    </div>
+    {% endif %}
 </aside>
+
+<!-- 通知ドロップダウンボックス -->
+<div class="user-notify-popover" id="user-notify-popover" aria-hidden="true" role="dialog" aria-label="新着通知">
+    <div class="notify-popover-header">
+        <div class="notify-popover-title">
+            <span>🔔 通知</span>
+            <span class="notify-popover-badge" id="notify-popover-badge" style="display:none;"></span>
+        </div>
+        <button class="notify-popover-close" id="notify-popover-close" type="button" aria-label="通知ボックスを閉じる">✕</button>
+    </div>
+    <div class="notify-popover-body" id="notify-popover-list">
+        <div class="notify-popover-loading">読み込み中...</div>
+    </div>
+    <div class="notify-popover-footer">
+        <a class="notify-popover-all-link" href="{{ url_for('user_notifications') }}">
+            すべて見る →
+        </a>
+    </div>
+</div>
+<button class="user-notify-backdrop" id="user-notify-backdrop" type="button" aria-label="通知を閉じる" hidden></button>
+
 {% if view_mode == 'mobile' %}
 <nav class="mobile-bottom-nav" aria-label="スマホ用クイックナビゲーション">
     <a href="{{ url_for('home') }}" class="{{ 'active' if request.endpoint == 'home' }}"><span class="nav-icon">🏠</span><span>ホーム</span></a>
@@ -108,6 +311,8 @@
 {% endif %}
 <script>
     (() => {
+        const csrfToken = {{ csrf_token|tojson }};
+
         document.addEventListener('click', event => {
             const link = event.target.closest('[data-history-back]');
             if (!link || window.history.length < 2 || !document.referrer) return;
@@ -120,23 +325,221 @@
                 // Keep the home link as a safe fallback.
             }
         });
-        const toggle = document.querySelector('.user-menu-toggle');
-        const panel = document.getElementById('user-menu-panel');
-        const backdrop = document.querySelector('.user-menu-backdrop');
-        const close = () => {
-            panel.setAttribute('aria-hidden', 'true');
-            toggle.setAttribute('aria-expanded', 'false');
-            backdrop.hidden = true;
+
+        // ユーザーメニューパネルの開閉制御
+        const menuToggle = document.querySelector('.user-menu-toggle');
+        const menuPanel = document.getElementById('user-menu-panel');
+        const menuBackdrop = document.querySelector('.user-menu-backdrop');
+        const closeMenu = () => {
+            if (menuPanel) menuPanel.setAttribute('aria-hidden', 'true');
+            if (menuToggle) menuToggle.setAttribute('aria-expanded', 'false');
+            if (menuBackdrop) menuBackdrop.hidden = true;
         };
-        toggle.addEventListener('click', () => {
-            const isOpen = panel.getAttribute('aria-hidden') === 'false';
-            panel.setAttribute('aria-hidden', String(isOpen));
-            toggle.setAttribute('aria-expanded', String(!isOpen));
-            backdrop.hidden = isOpen;
+        if (menuToggle && menuPanel && menuBackdrop) {
+            menuToggle.addEventListener('click', () => {
+                const isOpen = menuPanel.getAttribute('aria-hidden') === 'false';
+                menuPanel.setAttribute('aria-hidden', String(isOpen));
+                menuToggle.setAttribute('aria-expanded', String(!isOpen));
+                menuBackdrop.hidden = isOpen;
+                if (!isOpen) closeNotifyPopover();
+            });
+            menuBackdrop.addEventListener('click', closeMenu);
+        }
+
+        // 通知ボックスの開閉と取得制御
+        const notifyPopover = document.getElementById('user-notify-popover');
+        const notifyBackdrop = document.getElementById('user-notify-backdrop');
+        const notifyCloseBtn = document.getElementById('notify-popover-close');
+        const notifyListEl = document.getElementById('notify-popover-list');
+        const notifyHeaderBadge = document.getElementById('notify-popover-badge');
+        const notifyBtns = document.querySelectorAll('.user-app-notify, .notify-link');
+
+        function updateAllBadges(unreadCount) {
+            const badges = document.querySelectorAll('.user-app-notify-badge');
+            badges.forEach(b => {
+                if (unreadCount > 0) {
+                    b.textContent = unreadCount;
+                    b.style.display = '';
+                } else {
+                    b.style.display = 'none';
+                }
+            });
+            const notifyLinks = document.querySelectorAll('.notify-link');
+            notifyLinks.forEach(link => {
+                if (unreadCount > 0) {
+                    link.textContent = `🔔 通知（未読${unreadCount}件）`;
+                } else {
+                    link.textContent = '🔔 通知';
+                }
+            });
+            if (notifyHeaderBadge) {
+                if (unreadCount > 0) {
+                    notifyHeaderBadge.textContent = `未読 ${unreadCount}件`;
+                    notifyHeaderBadge.style.display = 'inline-flex';
+                } else {
+                    notifyHeaderBadge.style.display = 'none';
+                }
+            }
+        }
+
+        function escapeHtml(str) {
+            if (!str) return '';
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
+
+        function closeNotifyPopover() {
+            if (!notifyPopover) return;
+            notifyPopover.setAttribute('aria-hidden', 'true');
+            if (notifyBackdrop) notifyBackdrop.hidden = true;
+            notifyBtns.forEach(btn => btn.setAttribute('aria-expanded', 'false'));
+        }
+
+        function openNotifyPopover() {
+            closeMenu();
+            if (!notifyPopover) return;
+            notifyPopover.setAttribute('aria-hidden', 'false');
+            if (notifyBackdrop) notifyBackdrop.hidden = false;
+            notifyBtns.forEach(btn => btn.setAttribute('aria-expanded', 'true'));
+            loadRecentNotifications();
+        }
+
+        function loadRecentNotifications() {
+            if (!notifyListEl) return;
+            notifyListEl.innerHTML = '<div class="notify-popover-loading">新しい通知を読み込み中...</div>';
+
+            fetch('/api/notifications/recent', {
+                headers: { 'X-Requested-With': 'XMLHttpRequest' }
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (!data || !data.ok) {
+                    notifyListEl.innerHTML = '<div class="notify-popover-empty">通知の取得に失敗しました</div>';
+                    return;
+                }
+                updateAllBadges(data.unread_count || 0);
+
+                const items = data.notifications || [];
+                if (items.length === 0) {
+                    notifyListEl.innerHTML = '<div class="notify-popover-empty">新しい通知はありません</div>';
+                    return;
+                }
+
+                notifyListEl.innerHTML = items.map(n => `
+                    <div class="notify-popover-item ${n.is_read ? '' : 'unread'}"
+                         data-id="${n.id}"
+                         data-unread="${!n.is_read}"
+                         data-url="${n.target_url || ''}"
+                         role="button"
+                         tabindex="0">
+                        <div class="notify-item-title">
+                            <span>${escapeHtml(n.title)}</span>
+                            ${n.is_read ? '' : '<span class="notify-item-badge">未読</span>'}
+                        </div>
+                        <div class="notify-item-msg">${escapeHtml(n.message)}</div>
+                        <div class="notify-item-footer">
+                            <span class="notify-item-time">${escapeHtml(n.created_at)}</span>
+                        </div>
+                    </div>
+                `).join('');
+
+                // 項目クリックイベントの設定
+                notifyListEl.querySelectorAll('.notify-popover-item').forEach(item => {
+                    function handleItemClick() {
+                        const id = item.getAttribute('data-id');
+                        const isUnread = item.getAttribute('data-unread') === 'true';
+                        const targetUrl = item.getAttribute('data-url');
+
+                        if (isUnread) {
+                            // UIを即座に既読状態にする
+                            item.classList.remove('unread');
+                            item.setAttribute('data-unread', 'false');
+                            const badge = item.querySelector('.notify-item-badge');
+                            if (badge) badge.remove();
+
+                            // 既読APIリクエスト
+                            fetch(`/notifications/${id}/read`, {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/x-www-form-urlencoded',
+                                    'X-Requested-With': 'XMLHttpRequest'
+                                },
+                                body: `csrf_token=${encodeURIComponent(csrfToken)}`
+                            })
+                            .then(res => res.json())
+                            .then(readData => {
+                                if (readData && typeof readData.unread_count === 'number') {
+                                    updateAllBadges(readData.unread_count);
+                                }
+                                if (targetUrl) {
+                                    window.location.href = targetUrl;
+                                }
+                            })
+                            .catch(err => {
+                                console.error('既読処理エラー:', err);
+                                if (targetUrl) {
+                                    window.location.href = targetUrl;
+                                }
+                            });
+                        } else if (targetUrl) {
+                            window.location.href = targetUrl;
+                        }
+                    }
+
+                    item.addEventListener('click', handleItemClick);
+                    item.addEventListener('keydown', e => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            handleItemClick();
+                        }
+                    });
+                });
+            })
+            .catch(err => {
+                console.error('通知一覧取得エラー:', err);
+                notifyListEl.innerHTML = '<div class="notify-popover-empty">通知を読み込めませんでした</div>';
+            });
+        }
+
+        const isNotificationsPage = {{ (request.endpoint == 'user_notifications')|tojson }};
+
+        notifyBtns.forEach(btn => {
+            btn.addEventListener('click', event => {
+                event.preventDefault();
+                if (isNotificationsPage) {
+                    // 通知一覧ページにいるときは四角いboxを出さず、ページの先頭から表示
+                    if (window.scrollY > 20) {
+                        window.scrollTo({ top: 0, behavior: 'smooth' });
+                    } else {
+                        window.location.reload();
+                    }
+                    return;
+                }
+                const isOpen = notifyPopover && notifyPopover.getAttribute('aria-hidden') === 'false';
+                if (isOpen) {
+                    closeNotifyPopover();
+                } else {
+                    openNotifyPopover();
+                }
+            });
         });
-        backdrop.addEventListener('click', close);
+
+        if (notifyCloseBtn) {
+            notifyCloseBtn.addEventListener('click', closeNotifyPopover);
+        }
+        if (notifyBackdrop) {
+            notifyBackdrop.addEventListener('click', closeNotifyPopover);
+        }
+
         document.addEventListener('keydown', event => {
-            if (event.key === 'Escape') close();
+            if (event.key === 'Escape') {
+                closeMenu();
+                closeNotifyPopover();
+            }
         });
     })();
 </script>

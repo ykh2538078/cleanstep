@@ -166,6 +166,7 @@ def _create_user_notifications_table(conn):
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
             event_id INTEGER,
+            issue_id INTEGER,
             notification_type TEXT NOT NULL CHECK(notification_type IN (
                 'reminder', 'organizer_message', 'cancellation',
                 'event_added', 'reservation', 'reservation_cancelled',
@@ -176,7 +177,8 @@ def _create_user_notifications_table(conn):
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             read_at TEXT,
             FOREIGN KEY (user_id) REFERENCES users(id),
-            FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE SET NULL
+            FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE SET NULL,
+            FOREIGN KEY (issue_id) REFERENCES issue_reports(id) ON DELETE SET NULL
         )
     ''')
 
@@ -592,6 +594,21 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_user_notifications_user_unread
             ON user_notifications(user_id, read_at, created_at)
         ''')
+
+        notification_cols = [
+            col['name'] for col in conn.execute('PRAGMA table_info(user_notifications)').fetchall()
+        ]
+        if 'issue_id' not in notification_cols:
+            conn.execute('ALTER TABLE user_notifications ADD COLUMN issue_id INTEGER REFERENCES issue_reports(id) ON DELETE SET NULL')
+            conn.execute('''
+                UPDATE user_notifications
+                SET issue_id = (
+                    SELECT i.id FROM issue_reports i
+                    WHERE (user_notifications.title LIKE '%' || i.title OR user_notifications.message LIKE '%' || i.title || '%')
+                    ORDER BY i.id DESC LIMIT 1
+                )
+                WHERE issue_id IS NULL AND (title LIKE '課題報告%' OR title LIKE '地域課題%')
+            ''')
 
         conn.execute('''
             CREATE TABLE IF NOT EXISTS trash_bins (
@@ -3056,12 +3073,12 @@ def issue_report_new():
                     }[report_type]
                     conn.execute('''
                         INSERT INTO user_notifications (
-                            user_id, notification_type, title, message
-                        ) VALUES (?, 'activity_completed', ?, ?)
+                            user_id, issue_id, notification_type, title, message
+                        ) VALUES (?, ?, 'activity_completed', ?, ?)
                     ''', (
-                        user_id,
+                        user_id, issue_id,
                         f'地域課題を報告しました：{title}',
-                        f'報告種別：{report_label}\\n場所：{location}\\n地域マップに共有されました。',
+                        f'報告種別：{report_label}\n場所：{location}\n地域マップに共有されました。',
                     ))
 
                 flash('地域の課題報告を送信しました。地図から清掃イベントや改善提案につなげられます。', 'success')
@@ -3742,10 +3759,10 @@ def admin_issue_status_update(issue_id):
             # ④ 報告者に通知
             conn.execute('''
                 INSERT INTO user_notifications (
-                    user_id, notification_type, title, message
-                ) VALUES (?, 'organizer_message', ?, ?)
+                    user_id, issue_id, notification_type, title, message
+                ) VALUES (?, ?, 'organizer_message', ?, ?)
             ''', (
-                issue['user_id'],
+                issue['user_id'], issue_id,
                 f'課題報告の対応状況更新：{issue["title"]}',
                 f'あなたが報告した「{issue["title"]}（{issue["location"]}）」の対応状況が「{status_label}」に更新されました。'
                 f'\n地域環境の変化：{environment_labels[environment_status]}'
@@ -4503,7 +4520,13 @@ def user_notifications():
 @app.route('/notifications/<int:notification_id>/read', methods=['POST'])
 @user_required
 def mark_notification_read(notification_id):
+    is_xhr = (
+        request.headers.get('X-Requested-With') == 'XMLHttpRequest'
+        or request.is_json
+    )
     if not validate_csrf():
+        if is_xhr:
+            return {'error': 'CSRFトークンが不正です。'}, 400
         return 'CSRFトークンが不正です。', 400
     conn = get_db()
     try:
@@ -4513,11 +4536,19 @@ def mark_notification_read(notification_id):
                 WHERE id = ? AND user_id = ?
             ''', (notification_id, session['user_id'])).fetchone()
             if notification is None:
+                if is_xhr:
+                    return {'error': '通知が見つかりません。'}, 404
                 return '通知が見つかりません。', 404
             conn.execute('''
                 UPDATE user_notifications SET read_at = CURRENT_TIMESTAMP
                 WHERE id = ? AND user_id = ? AND read_at IS NULL
             ''', (notification_id, session['user_id']))
+        if is_xhr:
+            unread_count = conn.execute('''
+                SELECT COUNT(*) FROM user_notifications
+                WHERE user_id = ? AND read_at IS NULL
+            ''', (session['user_id'],)).fetchone()[0]
+            return {'ok': True, 'unread_count': unread_count}
         return redirect(url_for('user_notifications'))
     finally:
         conn.close()
@@ -4530,10 +4561,10 @@ def open_notification(notification_id):
         return 'CSRFトークンが不正です。', 400
     conn = get_db()
     try:
-        event_id = None
+        target_url = None
         with conn:
             notification = conn.execute('''
-                SELECT event_id FROM user_notifications
+                SELECT event_id, issue_id FROM user_notifications
                 WHERE id = ? AND user_id = ?
             ''', (notification_id, session['user_id'])).fetchone()
             if notification is None:
@@ -4550,10 +4581,17 @@ def open_notification(notification_id):
                       AND review_status = 'approved'
                 ''', (notification['event_id'],)).fetchone()
                 if event is not None:
-                    event_id = event['id']
+                    target_url = url_for('event_reserve', event_id=event['id'])
+            elif notification['issue_id'] is not None:
+                issue = conn.execute('''
+                    SELECT id FROM issue_reports
+                    WHERE id = ?
+                ''', (notification['issue_id'],)).fetchone()
+                if issue is not None:
+                    target_url = url_for('regional_map', issue_id=issue['id'])
 
-        if event_id is not None:
-            return redirect(url_for('event_reserve', event_id=event_id))
+        if target_url is not None:
+            return redirect(target_url)
         return redirect(url_for('user_notifications'))
     finally:
         conn.close()
@@ -4572,6 +4610,62 @@ def mark_all_notifications_read():
                 WHERE user_id = ? AND read_at IS NULL
             ''', (session['user_id'],))
         return redirect(url_for('user_notifications'))
+    finally:
+        conn.close()
+
+
+@app.route('/api/notifications/recent')
+@user_required
+def api_recent_notifications():
+    user_id = session['user_id']
+    conn = get_db()
+    try:
+        _create_due_event_reminders(conn, user_id)
+        notifications = conn.execute('''
+            SELECT n.id, n.event_id, n.issue_id, n.notification_type, n.title, n.message,
+                   n.created_at, n.read_at,
+                   e.name AS event_name
+            FROM user_notifications n
+            LEFT JOIN events e ON e.id = n.event_id
+            WHERE n.user_id = ?
+            ORDER BY n.created_at DESC, n.id DESC
+            LIMIT 5
+        ''', (user_id,)).fetchall()
+
+        unread_count = conn.execute('''
+            SELECT COUNT(*) FROM user_notifications
+            WHERE user_id = ? AND read_at IS NULL
+        ''', (user_id,)).fetchone()[0]
+
+        items = []
+        for row in notifications:
+            target_url = None
+            action_label = None
+            if row['event_id']:
+                target_url = url_for('event_reserve', event_id=row['event_id'])
+                action_label = 'イベント詳細 →'
+            elif row['issue_id']:
+                target_url = url_for('regional_map', issue_id=row['issue_id'])
+                action_label = '📍 地図で課題を見る →'
+
+            items.append({
+                'id': row['id'],
+                'event_id': row['event_id'],
+                'issue_id': row['issue_id'],
+                'notification_type': row['notification_type'],
+                'title': row['title'],
+                'message': row['message'],
+                'created_at': format_jst_datetime(row['created_at']),
+                'is_read': bool(row['read_at']),
+                'target_url': target_url,
+                'action_label': action_label,
+            })
+
+        return {
+            'ok': True,
+            'unread_count': unread_count,
+            'notifications': items,
+        }
     finally:
         conn.close()
 
