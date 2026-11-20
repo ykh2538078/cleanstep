@@ -4293,7 +4293,11 @@ def event_reserve(event_id):
             event_datetime = None
             upcoming = False
         if not upcoming:
-            return '開催日時を過ぎたイベントは予約できません。', 410
+            return render_template(
+                'event_unavailable.html',
+                title='イベント予約不可',
+                message='開催日時を過ぎたイベントは予約できません。'
+            ), 410
         if event_datetime > now + timedelta(days=365):
             return 'イベントの予約は開催日の1年前から受け付けています。', 400
 
