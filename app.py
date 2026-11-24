@@ -161,6 +161,79 @@ def get_db():
     return conn
 
 
+def _ensure_knowledge_base_table(conn):
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS regional_knowledge_cases (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            region_name TEXT NOT NULL,
+            region_type TEXT NOT NULL DEFAULT 'coastal_tourism'
+                CHECK(region_type IN ('coastal_tourism', 'shopping_urban', 'rural_nature')),
+            title TEXT NOT NULL UNIQUE,
+            issue_summary TEXT NOT NULL,
+            proposal_type TEXT NOT NULL DEFAULT 'ごみ箱の増設・配置見直し',
+            action_taken TEXT NOT NULL,
+            outcome_status TEXT NOT NULL DEFAULT 'improved'
+                CHECK(outcome_status IN ('improved', 'partial_lesson')),
+            outcome_note TEXT NOT NULL,
+            lesson_learned TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    seed_knowledge_cases = [
+        (
+            '湘南・沿岸観光モデル地区',
+            'coastal_tourism',
+            '海岸遊歩道の週末ペットボトル散乱に対する夕暮れ重点清掃と分別箱配置',
+            '観光シーズンの週末15〜18時に遊歩道ベンチ周辺でペットボトル・プラカップ散乱が集中（最寄りごみ箱から300m超）。',
+            '重点清掃イベントの開催',
+            '距離分析で空白地帯だった遊歩道中央に週末限定の分別エコごみ箱を配置し、日曜夕方に地域マリンカフェ協賛の30分クリーンイベントを開催。',
+            'improved',
+            '現地確認により月曜朝の散乱報告が月7件→1件へ減少し、環境改善を確認。',
+            '観光・海岸地域では朝よりも観光客が帰る夕方直前の短時間イベントと地域カフェ特典の組み合わせが参加率・美化維持に有効。',
+        ),
+        (
+            '日田・レトロ商店街モデル地区',
+            'shopping_urban',
+            '食べ歩き商店街でのごみ箱単体増設による分別混乱と写真付き案内への改善',
+            '週末の食べ歩き容器（串・プラカップ）が自販機横のごみ箱から溢れ、同一場所での再報告が繰り返された。',
+            '分別案内・啓発サインの設置',
+            '当初はごみ箱を1基増設したのみだったが未分別ごみが混入。2か月目に写真付きの飲み残し・分別案内サインを併設し、協賛店舗での声かけを実施。',
+            'partial_lesson',
+            '1か月目は環境変化なし（満杯再発）だったが、案内サインと店舗連携を追加した2か月目以降に満杯報告が半減。',
+            '【失敗・改善からの知見】ごみ箱を単体で増設するだけでは分別悪化や満杯再発を招く場合があり、写真付き分別サインと周辺店舗の協力をセットにする必要がある。',
+        ),
+        (
+            '箕面・河川里山モデル地区',
+            'rural_nature',
+            '河川敷・里山散策ルートでの早期発見QR看板と直売所特典つき保全活動',
+            '河川敷入口から200m離れた茂みにビニール袋・空き缶の放置が月3〜4回再発。野生動物による散乱リスクもあった。',
+            '巡回・再発防止対策',
+            'ごみ箱の常設が難しい自然区域のため、入口に課題報告QRつき啓発サインを設置し、月1回の河川・里山保全イベント参加者に地元農産物直売所クーポンを還元。',
+            'improved',
+            '現地確認で3か月連続して茂みへの不法投棄・再発ゼロを確認。',
+            'ごみ箱を常設できない自然・農村地域では、定点課題報告による早期発見と地元農産物特典を活かした定期巡回イベントが効果的。',
+        ),
+        (
+            '横浜・駅前市街地モデル地区',
+            'shopping_urban',
+            '駅前バス停・植え込みの吸い殻・飲料缶集中に対する役割分担型クリーン活動',
+            '通勤・通学導線の植え込みに吸い殻と空き缶が繰り返し報告されていた。',
+            '重点清掃イベントの開催',
+            '参加者を「回収係」「分別係」「記録係」に分けた朝活清掃を実施し、記録係が特定した死角2か所の植栽剪定と啓発サイン設置を行政へ提案。',
+            'improved',
+            '植栽の視認性向上と月2回の朝活定着により、現地確認で植え込み内の再発解消を確認。',
+            'イベント参加者に「記録係」の役割を設けることで、単なる回収にとどまらず発生原因（死角・動線）の発見と行政連携につながる。',
+        ),
+    ]
+    conn.executemany('''
+        INSERT OR IGNORE INTO regional_knowledge_cases (
+            region_name, region_type, title, issue_summary,
+            proposal_type, action_taken, outcome_status,
+            outcome_note, lesson_learned
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', seed_knowledge_cases)
+
+
 def _create_user_notifications_table(conn):
     conn.execute('''
         CREATE TABLE IF NOT EXISTS user_notifications (
@@ -3346,6 +3419,7 @@ def improvement_proposals_board():
         raw_issue_id = form_values['issue_report_id']
         from_case_id = request.args.get('from_case', type=int)
         if request.method == 'GET' and from_case_id:
+            _ensure_knowledge_base_table(conn)
             kb_case = conn.execute(
                 'SELECT * FROM regional_knowledge_cases WHERE id = ?',
                 (from_case_id,),
@@ -3542,6 +3616,8 @@ def regional_knowledge_base():
         is_organizer = (role == 'user' and bool(get_user_organization_id(conn, user_id)))
         current_region = get_region_profile(conn)
         error_msg = None
+        with conn:
+            _ensure_knowledge_base_table(conn)
 
         if request.method == 'POST':
             if not is_admin:
@@ -3626,21 +3702,25 @@ def regional_knowledge_base():
             c['region_type_icon'] = prof['icon']
             c['matches_current_region'] = (c['region_type'] == current_region['region_type'])
 
-        local_completed_proposals = [
-            dict(row) for row in conn.execute('''
-                SELECT p.id, p.title, p.location, p.proposal_type,
-                       p.description, p.implementation_details,
-                       p.implemented_on, p.outcome_note, p.support_count,
-                       i.title AS issue_title
-                FROM improvement_proposals p
-                LEFT JOIN issue_reports i ON i.id = p.issue_report_id
-                WHERE p.status IN ('adopted', 'completed')
-                   OR p.implementation_details != ''
-                   OR p.outcome_note != ''
-                ORDER BY p.id DESC
-                LIMIT 10
-            ''').fetchall()
-        ]
+        local_completed_proposals = []
+        try:
+            local_completed_proposals = [
+                dict(row) for row in conn.execute('''
+                    SELECT p.id, p.title, p.location, p.proposal_type,
+                           p.description, p.implementation_details,
+                           p.implemented_on, p.outcome_note, p.support_count,
+                           i.title AS issue_title
+                    FROM improvement_proposals p
+                    LEFT JOIN issue_reports i ON i.id = p.issue_report_id
+                    WHERE p.status IN ('adopted', 'completed')
+                       OR p.implementation_details != ''
+                       OR p.outcome_note != ''
+                    ORDER BY p.id DESC
+                    LIMIT 10
+                ''').fetchall()
+            ]
+        except sqlite3.OperationalError:
+            local_completed_proposals = []
 
         return render_template(
             'knowledge_base.html',
@@ -7759,6 +7839,7 @@ def _prefill_event_from_issue(event_values):
                     )[:500],
                 })
         elif from_case_id:
+            _ensure_knowledge_base_table(conn)
             kb_case = conn.execute(
                 'SELECT * FROM regional_knowledge_cases WHERE id = ?',
                 (from_case_id,),
