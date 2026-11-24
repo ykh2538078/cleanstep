@@ -347,6 +347,14 @@ JST = timezone(timedelta(hours=9))
 EVENT_DEMO_DEFAULT = os.environ.get('CLEANSTEP_EVENT_DEMO_MODE', '0') == '1'
 EVENT_MAX_SESSION_DURATION_SECONDS = 12 * 60 * 60
 
+# イベント参加時のGPS検証パラメータ
+EVENT_LOCATION_RADIUS_METERS = 300          # 完了時に開催地点から許容する半径（m）
+MAX_GPS_WALK_SPEED_MPS = 3.0                # GPS移動として許容する最大速度（m/秒）
+GPS_ESTIMATED_STEP_LENGTH_M = 0.75          # GPS距離から歩数を推定する歩幅（m）
+MAX_DEVICE_STEPS_PER_SECOND = 4             # 端末歩数として許容する最大歩数（歩/秒）
+MAX_STEP_STRIDE_M = 1.5                     # 端末歩数の妥当性判定に使う最大歩幅（m）
+MIN_STEP_DISTANCE_RATIO = 0.5               # GPS距離に対し端末歩数が満たすべき最小比率
+
 
 
 def get_event_demo_mode(conn=None):
