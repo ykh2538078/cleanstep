@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>地域間知見アーカイブ・類似事例検索 | CleanStep</title>
+    <style>
+        body { font-family: 'Helvetica Neue', Arial, "Yu Gothic", Meiryo, sans-serif; margin: 0; background: #f4f7f6; color: #263238; }
+        .header { background: linear-gradient(135deg, #17633f, #257a52); color: #fff; padding: 28px 20px 22px; text-align: center; }
+        .header h1 { margin: 0 0 6px; font-size: 24px; }
+        .header p { margin: 0; font-size: 13px; opacity: .94; }
+        .container { max-width: 1120px; margin: 22px auto; padding: 0 16px 40px; }
+        .card { background: #fff; border: 1px solid #dce5e1; border-radius: 14px; padding: 22px; margin-bottom: 18px; box-shadow: 0 4px 14px rgba(0,0,0,.04); }
+        .card h2 { margin: 0 0 12px; font-size: 18px; color: #17633f; border-left: 4px solid #2ecc71; padding-left: 10px; }
+        .filter-bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+        input[type="text"], select, textarea { box-sizing: border-box; padding: 10px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font: inherit; font-size: 13px; background: #fcfcfc; }
+        .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 9px 15px; border: 0; border-radius: 20px; background: #257a52; color: #fff; font-size: 13px; font-weight: 700; text-decoration: none; cursor: pointer; }
+        .btn-outline { background: #eef7f1; color: #17633f; border: 1px solid #ccebdd; }
+        .case-card { border: 1px solid #dce5e1; border-radius: 12px; padding: 18px; margin-bottom: 16px; background: #fff; }
+        .case-card.matched { border: 2px solid #2ecc71; background: #fafdfb; }
+        .badge { display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 11px; font-weight: 700; }
+        .badge-region { background: #e0f2fe; color: #0369a1; }
+        .badge-match { background: #dcfce7; color: #166534; }
+        .badge-improved { background: #dcfce7; color: #166534; }
+        .badge-partial { background: #fef3c7; color: #92400e; }
+        .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 12px 0; font-size: 13px; line-height: 1.6; }
+        @media (max-width: 760px) { .meta-grid { grid-template-columns: 1fr; } }
+        .meta-box { padding: 12px; border-radius: 8px; background: #f8fafc; border: 1px solid #e2e8f0; }
+        .lesson-box { padding: 12px 14px; border-radius: 8px; background: #fffbeb; border-left: 4px solid #f59e0b; font-size: 13px; line-height: 1.6; color: #78350f; margin-top: 10px; }
+        .flash-msg { padding: 12px 16px; border-radius: 10px; background: #eef7f1; border: 1px solid #ccebdd; color: #17633f; margin-bottom: 16px; font-weight: 700; }
+        .error-msg { padding: 12px 16px; border-radius: 10px; background: #fff0ef; border: 1px solid #f1b9b5; color: #8f241f; margin-bottom: 16px; font-weight: 700; }
+    </style>
+</head>
+<body data-view-mode="{{ view_mode }}">
+    {% if is_admin %}
+        {% include "_admin_navigation.html" %}
+    {% elif is_organizer %}
+        {% include "_organizer_navigation.html" %}
+    {% else %}
+        {% include "_user_navigation.html" %}
+    {% endif %}
+
+    <div class="header">
+        <h1>📚 地域間知見循環アーカイブ（類似地域・課題事例）</h1>
+        <p>地域の経験が、全国の未来をつくる — 個人情報を分離し、各地域の成功事例と「失敗・改善からの学び」を共有・還元する基盤</p>
+    </div>
+
+    <main class="container">
+        <p>
+            {% if is_admin %}
+                <a href="{{ url_for('admin_dashboard') }}">← 管理者ダッシュボードに戻る</a>
+            {% elif is_organizer %}
+                <a href="{{ url_for('organizer_dashboard') }}">← 団体ダッシュボードに戻る</a>
+            {% else %}
+                <a href="{{ url_for('home') }}">← ホームに戻る</a>
+            {% endif %}
+        </p>
+
+        {% for category, message in get_flashed_messages(with_categories=true) %}
+            <div class="flash-msg" role="status">{{ message }}</div>
+        {% endfor %}
+        {% if error_msg %}
+            <div class="error-msg" role="alert">{{ error_msg }}</div>
+        {% endif %}
+
+        <section class="card" style="background: linear-gradient(135deg, #f8fcf9, #eef7f1);">
+            <h2>🌏 現在の自地域プロファイルと類似地域の知見検索</h2>
+            <p style="font-size:13px; margin:0 0 12px; line-height:1.6;">
+                現在の地域設定：<strong>{{ current_region.icon }} {{ current_region.region_name }}（{{ current_region.label }}）</strong> ｜ 重点課題：{{ current_region.focus_areas }}<br>
+                <small style="color:#475569;">※ 個人情報は自治体ごとに厳格に分離され、公開許可・匿名化された「地域特性・課題・対策・現地確認結果・学び」のみが共有されます。</small>
+            </p>
+            <form method="GET" action="{{ url_for('regional_knowledge_base') }}" class="filter-bar">
+                <select name="region_type" aria-label="地域特性で絞り込み">
+                    <option value="">すべての地域特性（自地域と同じ特性を優先表示）</option>
+                    {% for key, prof in region_profiles.items() %}
+                        <option value="{{ key }}" {% if filter_region_type == key %}selected{% endif %}>{{ prof.icon }} {{ prof.label }}</option>
+                    {% endfor %}
+                </select>
+                <select name="outcome_status" aria-label="結果・知見区分で絞り込み">
+                    <option value="">すべての結果（成功＋失敗・改善からの学び）</option>
+                    <option value="improved" {% if filter_outcome == 'improved' %}selected{% endif %}>✅ 環境改善を確認できた事例</option>
+                    <option value="partial_lesson" {% if filter_outcome == 'partial_lesson' %}selected{% endif %}>💡 変化限定・再発からの改善知見（失敗からの学び）</option>
+                </select>
+                <input type="text" name="q" value="{{ keyword }}" placeholder="キーワード（ペットボトル、商店街、看板など）" style="min-width:240px;">
+                <button type="submit" class="btn">🔍 事例を検索</button>
+                <a href="{{ url_for('regional_knowledge_base') }}" class="btn btn-outline">リセット</a>
+            </form>
+        </section>
+
+        <section class="card">
+            <h2>📖 共有されている地域改善事例・知見（{{ cases|length }} 件）</h2>
+            {% for c in cases %}
+                <article class="case-card {{ 'matched' if c.matches_current_region }}">
+                    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+                        <div>
+                            <span class="badge badge-region">{{ c.region_type_icon }} {{ c.region_type_label }} ｜ {{ c.region_name }}</span>
+                            {% if c.matches_current_region %}
+                                <span class="badge badge-match">★ 自地域と同じ地域特性</span>
+                            {% endif %}
+                            <span class="badge {{ 'badge-improved' if c.outcome_status == 'improved' else 'badge-partial' }}">
+                                {{ '✅ 現地確認：環境改善を確認' if c.outcome_status == 'improved' else '💡 失敗・改善からの学び（追加対策で改善）' }}
+                            </span>
+                        </div>
+                        <span class="badge" style="background:#f1f5f9; color:#334155;">対策区分：{{ c.proposal_type }}</span>
+                    </div>
+
+                    <h3 style="margin:10px 0 6px; font-size:17px; color:#1e293b;">{{ c.title }}</h3>
+
+                    <div class="meta-grid">
+                        <div class="meta-box">
+                            <strong style="color:#991b1b;">🚩 直面していた地域課題</strong><br>
+                            {{ c.issue_summary }}
+                        </div>
+                        <div class="meta-box">
+                            <strong style="color:#17633f;">🛠️ 実施した対策・運用方法</strong><br>
+                            {{ c.action_taken }}
+                        </div>
+                    </div>
+
+                    <div style="font-size:13px; line-height:1.6;">
+                        <strong>📊 実施後の環境変化（現地確認結果）：</strong> {{ c.outcome_note }}
+                    </div>
+
+                    {% if c.lesson_learned %}
+                        <div class="lesson-box">
+                            <strong>💡 他地域へ還元する知見・ポイント：</strong> {{ c.lesson_learned }}
+                        </div>
+                    {% endif %}
+
+                    <div style="margin-top:14px; display:flex; flex-wrap:wrap; gap:10px;">
+                        {% if not is_admin %}
+                            <a href="{{ url_for('improvement_proposals_board', from_case=c.id) }}" class="btn">
+                                💡 この事例を参考に自地域の改善提案を作成
+                            </a>
+                        {% endif %}
+                        {% if is_organizer %}
+                            <a href="{{ url_for('organizer_event_new', from_case=c.id) }}" class="btn btn-outline">
+                                🧹 この事例を参考に清掃イベントを企画
+                            </a>
+                        {% elif is_admin %}
+                            <a href="{{ url_for('admin_event_add', from_case=c.id) }}" class="btn btn-outline">
+                                🧹 この事例を参考に清掃イベントを登録
+                            </a>
+                        {% endif %}
+                    </div>
+                </article>
+            {% else %}
+                <p style="color:#64748b; font-size:14px;">条件に一致する事例が見つかりませんでした。</p>
+            {% endfor %}
+        </section>
+
+        {% if local_completed_proposals %}
+            <section class="card">
+                <h2>📍 自地域で蓄積された改善実践記録（{{ current_region.region_name }}）</h2>
+                <p style="font-size:13px; color:#475569; margin:0 0 12px;">
+                    自地域の改善提案ボードで「採用・対策完了」または実施記録が入力された取り組みです。
+                </p>
+                {% for lp in local_completed_proposals %}
+                    <div style="padding:12px 14px; border:1px solid #e2e8f0; border-radius:10px; margin-bottom:10px; font-size:13px; line-height:1.6;">
+                        <strong>{{ lp.title }}</strong>（📍 {{ lp.location }} ｜ 区分：{{ lp.proposal_type }} ｜ 👍 賛同 {{ lp.support_count }}）<br>
+                        {% if lp.implementation_details %}実施内容：{{ lp.implementation_details }}<br>{% endif %}
+                        {% if lp.outcome_note %}実施後の結果：<strong>{{ lp.outcome_note }}</strong>{% endif %}
+                    </div>
+                {% endfor %}
+            </section>
+        {% endif %}
+
+        {% if is_admin %}
+            <section class="card">
+                <h2>➕ 新しい地域改善知見・事例を共通アーカイブへ登録（管理者専用）</h2>
+                <p style="font-size:13px; color:#475569; margin:0 0 14px;">
+                    自地域で実施した対策の成果や「こうすれば良かった」という改善知見を、個人情報を除いた形で地域間アーカイブへ登録します。
+                </p>
+                <form method="POST" action="{{ url_for('regional_knowledge_base') }}" style="display:grid; gap:12px;">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <div class="meta-grid" style="margin:0;">
+                        <div>
+                            <label for="kb-region-name" style="display:block; font-weight:700; font-size:13px; margin-bottom:4px;">自治体・モデル地区名</label>
+                            <input id="kb-region-name" type="text" name="region_name" value="{{ current_region.region_name }}" maxlength="100" required style="width:100%;">
+                        </div>
+                        <div>
+                            <label for="kb-region-type" style="display:block; font-weight:700; font-size:13px; margin-bottom:4px;">地域特性タイプ</label>
+                            <select id="kb-region-type" name="region_type" style="width:100%;">
+                                {% for key, prof in region_profiles.items() %}
+                                    <option value="{{ key }}" {% if current_region.region_type == key %}selected{% endif %}>{{ prof.icon }} {{ prof.label }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                    </div>
+                    <div class="meta-grid" style="margin:0;">
+                        <div>
+                            <label for="kb-title" style="display:block; font-weight:700; font-size:13px; margin-bottom:4px;">事例タイトル（必須）</label>
+                            <input id="kb-title" type="text" name="title" maxlength="120" required placeholder="例：〇〇公園ベンチ周辺の飲料容器散乱に対する週末夕暮れ清掃と分別案内" style="width:100%;">
+                        </div>
+                        <div>
+                            <label for="kb-proposal-type" style="display:block; font-weight:700; font-size:13px; margin-bottom:4px;">対策区分</label>
+                            <select id="kb-proposal-type" name="proposal_type" style="width:100%;">
+                                {% for pt in proposal_types %}
+                                    <option value="{{ pt }}">{{ pt }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                    </div>
+                    <div>
+                        <label for="kb-issue" style="display:block; font-weight:700; font-size:13px; margin-bottom:4px;">直面していた地域課題（必須）</label>
+                        <textarea id="kb-issue" name="issue_summary" rows="2" maxlength="500" required style="width:100%;" placeholder="どのような場所・時間帯・ごみ種類の課題があったか"></textarea>
+                    </div>
+                    <div>
+                        <label for="kb-action" style="display:block; font-weight:700; font-size:13px; margin-bottom:4px;">実施した対策・運用内容（必須）</label>
+                        <textarea id="kb-action" name="action_taken" rows="2" maxlength="500" required style="width:100%;" placeholder="イベント・ごみ箱配置・分別サイン・店舗連携などの具体的な取り組み"></textarea>
+                    </div>
+                    <div class="meta-grid" style="margin:0;">
+                        <div>
+                            <label for="kb-outcome-status" style="display:block; font-weight:700; font-size:13px; margin-bottom:4px;">結果・知見の区分</label>
+                            <select id="kb-outcome-status" name="outcome_status" style="width:100%;">
+                                <option value="improved">✅ 環境改善を確認できた事例</option>
+                                <option value="partial_lesson">💡 変化限定・再発からの改善知見（失敗からの学び）</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="kb-outcome-note" style="display:block; font-weight:700; font-size:13px; margin-bottom:4px;">実施後の現地確認結果（必須）</label>
+                            <input id="kb-outcome-note" type="text" name="outcome_note" maxlength="500" required style="width:100%;" placeholder="例：現地確認で再報告が月6件→1件に減少">
+                        </div>
+                    </div>
+                    <div>
+                        <label for="kb-lesson" style="display:block; font-weight:700; font-size:13px; margin-bottom:4px;">他地域へ還元する学び・改善ポイント（任意）</label>
+                        <textarea id="kb-lesson" name="lesson_learned" rows="2" maxlength="500" style="width:100%;" placeholder="成功の要因や、失敗してやり直したからこそ分かった注意点"></textarea>
+                    </div>
+                    <div>
+                        <button type="submit" class="btn">📚 地域間知見アーカイブに登録・公開する</button>
+                    </div>
+                </form>
+            </section>
+        {% endif %}
+    </main>
+</body>
+</html>

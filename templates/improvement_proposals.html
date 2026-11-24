@@ -50,6 +50,11 @@
             <div>
                 <div class="card">
                     <h2>🚀 新しい改善アクションを提案する</h2>
+                    <p style="margin:0 0 12px; font-size:12px;">
+                        <a href="{{ url_for('regional_knowledge_base') }}" style="color:#17633f; font-weight:700; text-decoration:underline;">
+                            📚 他地域の成功・失敗改善事例（地域間知見アーカイブ）を参考にして提案を作成する →
+                        </a>
+                    </p>
                     <form method="POST" action="{{ url_for('improvement_proposals_board') }}">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                         <label for="title">提案タイトル</label>

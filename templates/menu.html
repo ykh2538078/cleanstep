@@ -179,6 +179,11 @@
     <div class="hero-banner">
         <h1><a href="{{ url_for('home') }}" style="color:white; text-decoration:none;">CleanStep</a></h1>
         <p>{% if view_mode == 'mobile' %}📱 現場で見つける・参加する・記録する{% else %}💻 活動を振り返り、地域の次の改善を考える{% endif %}</p>
+        {% if region_profile %}
+            <div style="margin-top:10px; display:inline-block; padding:6px 14px; border-radius:999px; background:rgba(255,255,255,0.18); font-size:12px; font-weight:700;">
+                {{ region_profile.icon }} {{ region_profile.region_name }}（{{ region_profile.label }}）｜ {{ region_profile.active_message }}
+            </div>
+        {% endif %}
     </div>
 
     <div class="container">
@@ -452,12 +457,19 @@
                         <h2>✨ あなたへのおすすめイベント</h2>
                         <p class="feedback-lead">
                             {% if my_report.preferred_categories %}これまで参加したイベントの種類と、今後の開催予定から選びました。{% else %}まずは開催日が近いイベントからご紹介します。{% endif %}
+                            {% if region_profile %}（{{ region_profile.icon }} {{ region_profile.label }}の推奨ジャンル：<strong>{{ region_profile.recommended_event_category }}</strong>）{% endif %}
                         </p>
                         {% for event in recommended_events %}
                             <div class="feedback-event">
                                 <div>
                                     <span class="feedback-event-name">{{ event.name }}</span>
-                                    <span class="feedback-event-meta">{{ event.category }} · {{ event.datetime|replace('-', '/') }} · {{ event.location }}</span>
+                                    <span class="feedback-event-meta">
+                                        {{ event.category }}
+                                        {% if region_profile and event.category == region_profile.recommended_event_category %}
+                                            <strong style="color:#17633f;">（★地域重点ジャンル）</strong>
+                                        {% endif %}
+                                        · {{ event.datetime|replace('-', '/') }} · {{ event.location }}
+                                    </span>
                                 </div>
                                 <a class="feedback-event-link" href="{{ url_for('event_reserve', event_id=event.id) }}">詳細を見る</a>
                             </div>

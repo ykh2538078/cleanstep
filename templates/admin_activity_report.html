@@ -33,6 +33,11 @@
     <p><a href="{{ url_for('admin_dashboard') }}">← 管理ダッシュボード</a></p>
     <h1>活動実績レポート</h1>
     <p class="note">直近12か月（今月を含む）の活動履歴を集計しています。件数はデータベースに記録された内容であり、ごみの重量・体積や環境効果を示すものではありません。</p>
+    <p style="margin: 10px 0 16px;">
+        <a href="{{ url_for('admin_export_activities_csv') }}" style="display:inline-block; padding:9px 14px; border-radius:6px; background:#257a52; color:#fff; text-decoration:none; font-size:13px; font-weight:700;">
+            📥 活動実績データをCSV出力（自治体システム連携）
+        </a>
+    </p>
     <div class="grid">
         <div class="card"><div class="number">{{ summary.active_users or 0 }}</div><div class="label">活動ユーザー数（実人数）</div></div>
         <div class="card"><div class="number">{{ summary.activity_count or 0 }}</div><div class="label">活動記録数</div></div>

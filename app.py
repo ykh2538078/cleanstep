@@ -10,6 +10,7 @@ import hashlib
 import secrets
 import math
 import calendar
+import csv
 import re
 import qrcode
 import sys
@@ -311,6 +312,78 @@ def get_event_demo_mode(conn=None):
     finally:
         if owns_connection:
             conn.close()
+
+
+REGION_PROFILES = {
+    'coastal_tourism': {
+        'label': '観光・海岸地域',
+        'icon': '🌊',
+        'focus_areas': '海岸・観光地の美化、飲料容器・プラごみの海洋流出防止',
+        'recommended_event_category': '海岸清掃',
+        'reward_theme': '観光関連店舗・マリンカフェ等の地域特典連携',
+        'default_message': '観光シーズンや週末の海岸・遊歩道でのペットボトル・プラ容器回収を重点推進中です。',
+    },
+    'shopping_urban': {
+        'label': '商店街・市街地',
+        'icon': '🏙️',
+        'focus_areas': '駅前・商店街・道路の美化、食べ歩き容器・吸い殻対策',
+        'recommended_event_category': 'まち・道路清掃',
+        'reward_theme': '地元商店街クーポン・地域内消費促進特典',
+        'default_message': '駅前・商店街の歩道美化と地元店舗での地域内循環（クーポン還元）を推進中です。',
+    },
+    'rural_nature': {
+        'label': '農村・自然地域',
+        'icon': '⛰️',
+        'focus_areas': '河川・里山・遊歩道の保全活動、不法投棄防止',
+        'recommended_event_category': '公園・河川清掃',
+        'reward_theme': '地元農産物・直売所連携特典・緑化活動寄付',
+        'default_message': '河川・里山の自然環境保全と、地元直売所・緑化活動につながる地域循環を推進中です。',
+    },
+}
+
+
+def get_region_profile(conn=None):
+    owns_connection = conn is None
+    if conn is None:
+        conn = get_db()
+    settings = {}
+    try:
+        rows = conn.execute('''
+            SELECT setting_key, setting_value
+            FROM app_settings
+            WHERE setting_key IN (
+                'region_name', 'region_type',
+                'region_custom_message', 'region_local_reward_label'
+            )
+        ''').fetchall()
+        settings = {row['setting_key']: row['setting_value'] for row in rows}
+    except sqlite3.OperationalError:
+        settings = {}
+    finally:
+        if owns_connection:
+            conn.close()
+
+    region_type = settings.get('region_type', 'coastal_tourism')
+    if region_type not in REGION_PROFILES:
+        region_type = 'coastal_tourism'
+    preset = REGION_PROFILES[region_type]
+    region_name = (settings.get('region_name') or '横浜・みなとみらいモデル地区').strip()
+    custom_message = (settings.get('region_custom_message') or '').strip()
+    local_reward_label = (settings.get('region_local_reward_label') or '').strip()
+    return {
+        'region_name': region_name,
+        'region_type': region_type,
+        'label': preset['label'],
+        'icon': preset['icon'],
+        'focus_areas': preset['focus_areas'],
+        'recommended_event_category': preset['recommended_event_category'],
+        'reward_theme': preset['reward_theme'],
+        'default_message': preset['default_message'],
+        'custom_message': custom_message,
+        'active_message': custom_message or preset['default_message'],
+        'local_reward_label': local_reward_label,
+        'effective_reward_theme': local_reward_label or preset['reward_theme'],
+    }
 
 
 def parse_event_datetime(value):
@@ -785,6 +858,77 @@ def init_db():
                 FOREIGN KEY (user_id) REFERENCES users(id)
             )
         ''')
+
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS regional_knowledge_cases (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                region_name TEXT NOT NULL,
+                region_type TEXT NOT NULL DEFAULT 'coastal_tourism'
+                    CHECK(region_type IN ('coastal_tourism', 'shopping_urban', 'rural_nature')),
+                title TEXT NOT NULL UNIQUE,
+                issue_summary TEXT NOT NULL,
+                proposal_type TEXT NOT NULL DEFAULT 'ごみ箱の増設・配置見直し',
+                action_taken TEXT NOT NULL,
+                outcome_status TEXT NOT NULL DEFAULT 'improved'
+                    CHECK(outcome_status IN ('improved', 'partial_lesson')),
+                outcome_note TEXT NOT NULL,
+                lesson_learned TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        seed_knowledge_cases = [
+            (
+                '湘南・沿岸観光モデル地区',
+                'coastal_tourism',
+                '海岸遊歩道の週末ペットボトル散乱に対する夕暮れ重点清掃と分別箱配置',
+                '観光シーズンの週末15〜18時に遊歩道ベンチ周辺でペットボトル・プラカップ散乱が集中（最寄りごみ箱から300m超）。',
+                '重点清掃イベントの開催',
+                '距離分析で空白地帯だった遊歩道中央に週末限定の分別エコごみ箱を配置し、日曜夕方に地域マリンカフェ協賛の30分クリーンイベントを開催。',
+                'improved',
+                '現地確認により月曜朝の散乱報告が月7件→1件へ減少し、環境改善を確認。',
+                '観光・海岸地域では朝よりも観光客が帰る夕方直前の短時間イベントと地域カフェ特典の組み合わせが参加率・美化維持に有効。',
+            ),
+            (
+                '日田・レトロ商店街モデル地区',
+                'shopping_urban',
+                '食べ歩き商店街でのごみ箱単体増設による分別混乱と写真付き案内への改善',
+                '週末の食べ歩き容器（串・プラカップ）が自販機横のごみ箱から溢れ、同一場所での再報告が繰り返された。',
+                '分別案内・啓発サインの設置',
+                '当初はごみ箱を1基増設したのみだったが未分別ごみが混入。2か月目に写真付きの飲み残し・分別案内サインを併設し、協賛店舗での声かけを実施。',
+                'partial_lesson',
+                '1か月目は環境変化なし（満杯再発）だったが、案内サインと店舗連携を追加した2か月目以降に満杯報告が半減。',
+                '【失敗・改善からの知見】ごみ箱を単体で増設するだけでは分別悪化や満杯再発を招く場合があり、写真付き分別サインと周辺店舗の協力をセットにする必要がある。',
+            ),
+            (
+                '箕面・河川里山モデル地区',
+                'rural_nature',
+                '河川敷・里山散策ルートでの早期発見QR看板と直売所特典つき保全活動',
+                '河川敷入口から200m離れた茂みにビニール袋・空き缶の放置が月3〜4回再発。野生動物による散乱リスクもあった。',
+                '巡回・再発防止対策',
+                'ごみ箱の常設が難しい自然区域のため、入口に課題報告QRつき啓発サインを設置し、月1回の河川・里山保全イベント参加者に地元農産物直売所クーポンを還元。',
+                'improved',
+                '現地確認で3か月連続して茂みへの不法投棄・再発ゼロを確認。',
+                'ごみ箱を常設できない自然・農村地域では、定点課題報告による早期発見と地元農産物特典を活かした定期巡回イベントが効果的。',
+            ),
+            (
+                '横浜・駅前市街地モデル地区',
+                'shopping_urban',
+                '駅前バス停・植え込みの吸い殻・飲料缶集中に対する役割分担型クリーン活動',
+                '通勤・通学導線の植え込みに吸い殻と空き缶が繰り返し報告されていた。',
+                '重点清掃イベントの開催',
+                '参加者を「回収係」「分別係」「記録係」に分けた朝活清掃を実施し、記録係が特定した死角2か所の植栽剪定と啓発サイン設置を行政へ提案。',
+                'improved',
+                '植栽の視認性向上と月2回の朝活定着により、現地確認で植え込み内の再発解消を確認。',
+                'イベント参加者に「記録係」の役割を設けることで、単なる回収にとどまらず発生原因（死角・動線）の発見と行政連携につながる。',
+            ),
+        ]
+        conn.executemany('''
+            INSERT OR IGNORE INTO regional_knowledge_cases (
+                region_name, region_type, title, issue_summary,
+                proposal_type, action_taken, outcome_status,
+                outcome_note, lesson_learned
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', seed_knowledge_cases)
 
         conn.execute('''
             CREATE TABLE IF NOT EXISTS organizer_applications (
@@ -1482,6 +1626,59 @@ def init_db():
                     demo_organization['id'], 'まち・道路清掃',
                     'デモ団体 清掃イベント', demo_organization['id'],
                 ))
+            if conn.execute('SELECT COUNT(*) FROM issue_reports').fetchone()[0] == 0:
+                demo_issues = [
+                    (
+                        1, '遊歩道ベンチ横のペットボトル・カップ散乱', '横浜みなとみらい公園',
+                        35.458600, 139.636800, 'ペットボトル・飲料容器', 'high',
+                        '週末夕方に飲料容器がベンチ周辺に集中して置かれている', 6,
+                        'open', 'unverified', '', 'litter',
+                    ),
+                    (
+                        2, '海沿い芝生エリア入口のプラ容器散乱（再報告）', '横浜みなとみらい公園',
+                        35.458900, 139.637100, 'ビニール・プラスチック', 'medium',
+                        '風が強い日にテイクアウト容器が植え込みに溜まっている', 4,
+                        'in_progress', 'recurred', '前回清掃から2週間後に週末イベント後の再発を現地確認', 'litter',
+                    ),
+                    (
+                        1, '潮風プロムナード入口への分別ごみ箱新設要望', '山下公園',
+                        35.445700, 139.649600, 'その他', 'medium',
+                        '最寄りのごみ箱まで300m以上あり、ベンチ脇への置き去りが発生しやすい', None,
+                        'resolved', 'improved', '週末仮設エコごみ箱と案内サイン設置後、散乱減少を現地確認', 'bin_installation',
+                    ),
+                ]
+                conn.executemany('''
+                    INSERT INTO issue_reports (
+                        user_id, title, location, latitude, longitude,
+                        trash_type, severity, description, ai_detected_count,
+                        status, environment_status, environment_note, report_type
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', demo_issues)
+            if conn.execute('SELECT COUNT(*) FROM improvement_proposals').fetchone()[0] == 0:
+                conn.executemany('''
+                    INSERT INTO improvement_proposals (
+                        user_id, author_role, title, location, proposal_type,
+                        description, status, support_count, admin_comment,
+                        implementation_details, implemented_on, outcome_note
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', [
+                    (
+                        1, 'user', 'みなとみらい遊歩道ベンチ横への週末分別エコボックス増設と夕暮れ清掃',
+                        '横浜みなとみらい公園', 'ごみ箱の増設・配置見直し',
+                        '最寄りごみ箱から離れたベンチ周辺で週末夕方に飲料容器が集中するため、分別案内サイン付き回収箱と日曜夕方の短時間清掃を提案します。',
+                        'under_review', 5, '距離帯分析でも300m超エリアに該当するため、来月の重点対策候補として検討中です。',
+                        '', None, '',
+                    ),
+                    (
+                        2, 'organizer', '山下公園プロムナードの写真付き分別案内サインとカフェ協賛クリーン活動',
+                        '山下公園', '分別案内・啓発サインの設置',
+                        '観光シーズンの飲み歩き容器散乱を防ぐため、写真付き水切り・分別サインと地元カフェ特典付き清掃イベントをセットで実施。',
+                        'completed', 8, '対策完了し、現地確認で散乱報告の減少を確認しました。',
+                        'プロムナード入口2か所に写真付き分別案内サインを設置し、日曜16時に30分清掃を2回開催',
+                        datetime.now(JST).strftime('%Y-%m-%d'),
+                        '現地確認により月曜朝の放置容器が7割減少し、環境改善を確認',
+                    ),
+                ])
         conn.execute('''
             UPDATE events SET name = 'みなとみらい清掃イベント'
             WHERE name = 'みなとみらいクリーン作戦'
@@ -1896,6 +2093,7 @@ def inject_csrf_token():
         'csrf_token': session['csrf_token'],
         'unread_notifications': unread_notifications,
         'view_mode': effective_view,
+        'region_profile': get_region_profile(),
     }
 
 
@@ -3129,7 +3327,28 @@ def improvement_proposals_board():
     conn = get_db()
     try:
         raw_issue_id = form_values['issue_report_id']
-        if (
+        from_case_id = request.args.get('from_case', type=int)
+        if request.method == 'GET' and from_case_id:
+            kb_case = conn.execute(
+                'SELECT * FROM regional_knowledge_cases WHERE id = ?',
+                (from_case_id,),
+            ).fetchone()
+            if kb_case:
+                region_prof = get_region_profile(conn)
+                form_values.update({
+                    'title': f"【他地域知見活用】{kb_case['title']}"[:100],
+                    'location': form_values['location'] or region_prof['region_name'],
+                    'proposal_type': (
+                        kb_case['proposal_type']
+                        if kb_case['proposal_type'] in PROPOSAL_TYPES
+                        else PROPOSAL_TYPES[0]
+                    ),
+                    'description': (
+                        f"参考事例（{kb_case['region_name']}）：{kb_case['action_taken']}\n"
+                        f"知見・学び：{kb_case['lesson_learned'] or kb_case['outcome_note']}"
+                    )[:500],
+                })
+        elif (
             request.method == 'GET'
             and raw_issue_id.isdigit()
             and len(raw_issue_id) <= 10
@@ -3282,6 +3501,144 @@ def support_improvement_proposal(proposal_id):
             else:
                 flash('この提案にはすでに賛同済みです。', 'info')
         return redirect(url_for('improvement_proposals_board'))
+    finally:
+        conn.close()
+
+
+@app.route('/knowledge-base', methods=['GET', 'POST'])
+def regional_knowledge_base():
+    user_id = session.get('user_id')
+    role = session.get('role')
+    if not user_id or role not in ('user', 'admin'):
+        return redirect(url_for('login'))
+
+    conn = get_db()
+    try:
+        account = conn.execute(
+            'SELECT role FROM users WHERE id = ?', (user_id,)
+        ).fetchone()
+        if not account or account['role'] != role:
+            session.clear()
+            return redirect(url_for('login'))
+
+        is_admin = (role == 'admin')
+        is_organizer = (role == 'user' and bool(get_user_organization_id(conn, user_id)))
+        current_region = get_region_profile(conn)
+        error_msg = None
+
+        if request.method == 'POST':
+            if not is_admin:
+                abort(403)
+            if not validate_csrf():
+                return 'CSRFトークンが不正です。', 400
+
+            region_name = (request.form.get('region_name') or current_region['region_name']).strip()[:100]
+            region_type = (request.form.get('region_type') or current_region['region_type']).strip()
+            title = (request.form.get('title') or '').strip()[:120]
+            issue_summary = (request.form.get('issue_summary') or '').strip()[:500]
+            proposal_type = (request.form.get('proposal_type') or PROPOSAL_TYPES[0]).strip()
+            action_taken = (request.form.get('action_taken') or '').strip()[:500]
+            outcome_status = (request.form.get('outcome_status') or 'improved').strip()
+            outcome_note = (request.form.get('outcome_note') or '').strip()[:500]
+            lesson_learned = (request.form.get('lesson_learned') or '').strip()[:500]
+
+            if region_type not in REGION_PROFILES:
+                region_type = current_region['region_type']
+            if proposal_type not in PROPOSAL_TYPES:
+                proposal_type = PROPOSAL_TYPES[0]
+            if outcome_status not in ('improved', 'partial_lesson'):
+                outcome_status = 'improved'
+
+            if not title or not issue_summary or not action_taken or not outcome_note:
+                error_msg = 'タイトル・直面していた課題・実施した対策・実施後の結果は必須です。'
+            else:
+                with conn:
+                    conn.execute('''
+                        INSERT INTO regional_knowledge_cases (
+                            region_name, region_type, title, issue_summary,
+                            proposal_type, action_taken, outcome_status,
+                            outcome_note, lesson_learned
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(title) DO UPDATE SET
+                            region_name = excluded.region_name,
+                            region_type = excluded.region_type,
+                            issue_summary = excluded.issue_summary,
+                            proposal_type = excluded.proposal_type,
+                            action_taken = excluded.action_taken,
+                            outcome_status = excluded.outcome_status,
+                            outcome_note = excluded.outcome_note,
+                            lesson_learned = excluded.lesson_learned
+                    ''', (
+                        region_name, region_type, title, issue_summary,
+                        proposal_type, action_taken, outcome_status,
+                        outcome_note, lesson_learned,
+                    ))
+                flash('地域間知見アーカイブに事例を登録・公開しました（個人情報は含まれません）。', 'success')
+                return redirect(url_for('regional_knowledge_base'))
+
+        filter_region_type = (request.args.get('region_type') or '').strip()
+        filter_outcome = (request.args.get('outcome_status') or '').strip()
+        keyword = (request.args.get('q') or '').strip()[:100]
+
+        where_clauses = []
+        params = []
+        if filter_region_type in REGION_PROFILES:
+            where_clauses.append('region_type = ?')
+            params.append(filter_region_type)
+        if filter_outcome in ('improved', 'partial_lesson'):
+            where_clauses.append('outcome_status = ?')
+            params.append(filter_outcome)
+        if keyword:
+            where_clauses.append(
+                '(title LIKE ? OR issue_summary LIKE ? OR action_taken LIKE ? OR lesson_learned LIKE ?)'
+            )
+            kw = f'%{keyword}%'
+            params.extend([kw, kw, kw, kw])
+
+        where_sql = ('WHERE ' + ' AND '.join(where_clauses)) if where_clauses else ''
+        cases = [
+            dict(row) for row in conn.execute(f'''
+                SELECT * FROM regional_knowledge_cases
+                {where_sql}
+                ORDER BY CASE WHEN region_type = ? THEN 0 ELSE 1 END, id DESC
+            ''', (*params, current_region['region_type'])).fetchall()
+        ]
+        for c in cases:
+            prof = REGION_PROFILES.get(c['region_type'], REGION_PROFILES['coastal_tourism'])
+            c['region_type_label'] = prof['label']
+            c['region_type_icon'] = prof['icon']
+            c['matches_current_region'] = (c['region_type'] == current_region['region_type'])
+
+        local_completed_proposals = [
+            dict(row) for row in conn.execute('''
+                SELECT p.id, p.title, p.location, p.proposal_type,
+                       p.description, p.implementation_details,
+                       p.implemented_on, p.outcome_note, p.support_count,
+                       i.title AS issue_title
+                FROM improvement_proposals p
+                LEFT JOIN issue_reports i ON i.id = p.issue_report_id
+                WHERE p.status IN ('adopted', 'completed')
+                   OR p.implementation_details != ''
+                   OR p.outcome_note != ''
+                ORDER BY p.id DESC
+                LIMIT 10
+            ''').fetchall()
+        ]
+
+        return render_template(
+            'knowledge_base.html',
+            cases=cases,
+            local_completed_proposals=local_completed_proposals,
+            region_profiles=REGION_PROFILES,
+            proposal_types=PROPOSAL_TYPES,
+            current_region=current_region,
+            filter_region_type=filter_region_type,
+            filter_outcome=filter_outcome,
+            keyword=keyword,
+            is_admin=is_admin,
+            is_organizer=is_organizer,
+            error_msg=error_msg,
+        )
     finally:
         conn.close()
 
@@ -5064,10 +5421,19 @@ def admin_ai_image(filename):
 # 課題報告画像の専用表示ルート
 # ==========================================
 @app.route('/issues/image/<int:issue_id>')
-@user_required
 def issue_report_image(issue_id):
+    user_id = session.get('user_id')
+    role = session.get('role')
+    if not user_id or role not in ('user', 'admin'):
+        return redirect(url_for('login'))
     conn = get_db()
     try:
+        account = conn.execute(
+            'SELECT role FROM users WHERE id = ?', (user_id,)
+        ).fetchone()
+        if not account or account['role'] != role:
+            session.clear()
+            return redirect(url_for('login'))
         issue = conn.execute(
             'SELECT image_path FROM issue_reports WHERE id = ?',
             (issue_id,)
@@ -5134,13 +5500,60 @@ def admin_dashboard():
                  WHERE date(created_at, '+9 hours') = date('now', '+9 hours')) AS total_rewards
         ''').fetchone()
         event_demo_mode = get_event_demo_mode(conn)
+        region_profile = get_region_profile(conn)
         return render_template(
             'admin_dashboard.html',
             stats=stats,
             event_demo_mode=event_demo_mode,
+            region_profile=region_profile,
+            region_profiles=REGION_PROFILES,
         )
     finally:
         conn.close()
+
+
+@app.route('/admin/settings/region-profile', methods=['POST'])
+@admin_required
+def admin_update_region_profile():
+    if not validate_csrf():
+        return 'CSRFトークンが不正です。', 400
+    region_name = (request.form.get('region_name') or '').strip()[:80]
+    region_type = (request.form.get('region_type') or 'coastal_tourism').strip()
+    custom_message = (request.form.get('region_custom_message') or '').strip()[:300]
+    local_reward_label = (request.form.get('region_local_reward_label') or '').strip()[:120]
+
+    if not region_name:
+        flash('自治体・地域名を1〜80文字で入力してください。', 'error')
+        return redirect(url_for('admin_dashboard'))
+    if region_type not in REGION_PROFILES:
+        flash('地域特性の選択が正しくありません。', 'error')
+        return redirect(url_for('admin_dashboard'))
+
+    conn = get_db()
+    try:
+        get_event_demo_mode(conn)
+        with conn:
+            for key, val in (
+                ('region_name', region_name),
+                ('region_type', region_type),
+                ('region_custom_message', custom_message),
+                ('region_local_reward_label', local_reward_label),
+            ):
+                conn.execute('''
+                    INSERT INTO app_settings (setting_key, setting_value, updated_at)
+                    VALUES (?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(setting_key) DO UPDATE SET
+                        setting_value = excluded.setting_value,
+                        updated_at = CURRENT_TIMESTAMP
+                ''', (key, val))
+    finally:
+        conn.close()
+
+    flash(
+        f'地域プロファイルを「{region_name}（{REGION_PROFILES[region_type]["label"]}）」に更新しました。',
+        'success',
+    )
+    return redirect(url_for('admin_dashboard'))
 
 
 @app.route('/admin/settings/event-demo-mode', methods=['POST'])
@@ -6924,6 +7337,262 @@ def delete_bin(bin_id):
         conn.close()
     return redirect(url_for('admin_bins'))
 
+
+def _sanitize_csv_cell(value):
+    if value is None:
+        return ''
+    if isinstance(value, (int, float)):
+        return value
+    text = str(value)
+    if (
+        text.startswith(('=', '+', '-', '@', '\t', '\r'))
+        and not re.fullmatch(r'[+-]?\d+(?:\.\d+)?', text)
+    ):
+        return f"'{text}"
+    return text
+
+
+def _build_csv_response(filename, headers, rows):
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, lineterminator='\r\n')
+    writer.writerow([_sanitize_csv_cell(h) for h in headers])
+    for row in rows:
+        writer.writerow([_sanitize_csv_cell(cell) for cell in row])
+    payload = buffer.getvalue().encode('utf-8-sig')
+    return app.response_class(
+        payload,
+        mimetype='text/csv; charset=utf-8',
+        headers={
+            'Content-Disposition': f'attachment; filename="{filename}"',
+            'Cache-Control': 'no-store',
+        },
+    )
+
+
+@app.route('/admin/export/issues.csv')
+@admin_required
+def admin_export_issues_csv():
+    conn = get_db()
+    try:
+        rows = conn.execute('''
+            SELECT i.id, i.created_at, i.report_type, i.title, i.location,
+                   i.latitude, i.longitude, i.trash_type, i.severity,
+                   i.ai_detected_count, i.bin_id, i.bin_problem_type,
+                   i.description, i.status, i.action_note,
+                   i.environment_status, i.environment_note,
+                   i.environment_checked_at
+            FROM issue_reports i
+            ORDER BY i.id DESC
+        ''').fetchall()
+    finally:
+        conn.close()
+    headers = [
+        'ID', '報告日時', '報告種別', 'タイトル', '場所',
+        '緯度', '経度', 'ごみ種類', '深刻度',
+        'AI推定個数', '対象ごみ箱ID', 'ごみ箱トラブル種別',
+        '詳細メモ', '対応状況', '対応メモ',
+        '現地確認後の環境変化', '環境確認メモ', '環境確認日時',
+    ]
+    csv_rows = [
+        [
+            r['id'], r['created_at'], r['report_type'], r['title'], r['location'],
+            r['latitude'], r['longitude'], r['trash_type'], r['severity'],
+            r['ai_detected_count'], r['bin_id'], r['bin_problem_type'],
+            r['description'], r['status'], r['action_note'],
+            r['environment_status'], r['environment_note'],
+            r['environment_checked_at'],
+        ]
+        for r in rows
+    ]
+    return _build_csv_response('cleanstep_issues.csv', headers, csv_rows)
+
+
+@app.route('/admin/export/bins.csv')
+@admin_required
+def admin_export_bins_csv():
+    conn = get_db()
+    try:
+        rows = conn.execute('''
+            SELECT b.id, b.name, b.description, b.lat, b.lng,
+                   b.waste_types, b.bin_status,
+                   (SELECT COUNT(*) FROM activity_history a
+                    WHERE a.type = 'trash_bin' AND a.title = b.name) AS usage_count
+            FROM trash_bins b
+            ORDER BY b.id
+        ''').fetchall()
+    finally:
+        conn.close()
+    headers = ['設置場所名', '住所・説明', '緯度', '経度', '分別区分', '稼働状態', '利用回数']
+    csv_rows = [
+        [
+            r['name'], r['description'], r['lat'], r['lng'],
+            r['waste_types'] or 'ペットボトル・カップ・容器',
+            r['bin_status'] or 'active',
+            r['usage_count'],
+        ]
+        for r in rows
+    ]
+    return _build_csv_response('cleanstep_bins.csv', headers, csv_rows)
+
+
+@app.route('/admin/export/activities.csv')
+@admin_required
+def admin_export_activities_csv():
+    conn = get_db()
+    try:
+        rows = conn.execute('''
+            SELECT a.id, a.date, a.type, a.title, a.trash_count,
+                   a.user_declared_count, a.trash_category, a.bag_size,
+                   a.participant_role, a.before_state, a.after_state,
+                   a.points_earned, a.points_pending, a.points_status,
+                   a.gps_measured
+            FROM activity_history a
+            ORDER BY a.date DESC, a.id DESC
+        ''').fetchall()
+    finally:
+        conn.close()
+    headers = [
+        '活動ID', '日時', '活動種別', 'タイトル・場所',
+        '確定回収個数', '自己申告個数', 'ごみ区分', '袋サイズ目安',
+        '参加役割', '活動前の状態', '活動後の状態',
+        '獲得ポイント', '保留ポイント', 'ポイント状態', 'GPS計測',
+    ]
+    csv_rows = [
+        [
+            r['id'], r['date'], r['type'], r['title'], r['trash_count'],
+            r['user_declared_count'], r['trash_category'], r['bag_size'],
+            r['participant_role'], r['before_state'], r['after_state'],
+            r['points_earned'], r['points_pending'], r['points_status'],
+            r['gps_measured'],
+        ]
+        for r in rows
+    ]
+    return _build_csv_response('cleanstep_activities.csv', headers, csv_rows)
+
+
+@app.route('/admin/bins/import-csv', methods=['POST'])
+@admin_required
+def admin_import_bins_csv():
+    if not validate_csrf():
+        return 'CSRFトークンが不正です。', 400
+    upload = request.files.get('csv_file')
+    if not upload or not upload.filename:
+        flash('インポートするCSVファイルを選択してください。', 'error')
+        return redirect(url_for('admin_bins'))
+
+    raw_bytes = upload.read(512 * 1024)
+    text = None
+    for encoding in ('utf-8-sig', 'utf-8', 'cp932'):
+        try:
+            text = raw_bytes.decode(encoding)
+            break
+        except UnicodeDecodeError:
+            continue
+    if text is None:
+        flash('CSVファイルの文字コードを読み取れませんでした（UTF-8またはShift-JISに対応しています）。', 'error')
+        return redirect(url_for('admin_bins'))
+
+    reader = csv.DictReader(io.StringIO(text))
+    if not reader.fieldnames:
+        flash('CSVヘッダー行が見つかりません。', 'error')
+        return redirect(url_for('admin_bins'))
+
+    def pick(row_dict, *keys):
+        for k in keys:
+            if k in row_dict and row_dict[k] is not None:
+                return str(row_dict[k]).strip()
+        return ''
+
+    status_aliases = {
+        'active': 'active',
+        '通常稼働': 'active',
+        '利用可能': 'active',
+        'full_reported': 'full_reported',
+        '満杯報告あり': 'full_reported',
+        '満杯': 'full_reported',
+        'maintenance': 'maintenance',
+        '点検・回収中': 'maintenance',
+        'メンテナンス中': 'maintenance',
+    }
+
+    parsed_bins = []
+    skipped_count = 0
+    for index, row in enumerate(reader, start=2):
+        if index > 502:
+            break
+        name = pick(row, 'name', '設置場所名', '名称')[:100]
+        description = pick(row, 'description', '住所・説明', '住所 / 説明', '説明', '住所')[:200]
+        raw_lat = pick(row, 'lat', 'latitude', '緯度')
+        raw_lng = pick(row, 'lng', 'longitude', '経度')
+        waste_types = (pick(row, 'waste_types', '分別区分', '回収対象') or 'ペットボトル・カップ・容器')[:100]
+        raw_status = pick(row, 'bin_status', '稼働状態', '状態') or 'active'
+        bin_status = status_aliases.get(raw_status, 'active')
+        if not name or not description:
+            skipped_count += 1
+            continue
+        try:
+            lat = float(raw_lat)
+            lng = float(raw_lng)
+            if (
+                not math.isfinite(lat) or not (-90 <= lat <= 90)
+                or not math.isfinite(lng) or not (-180 <= lng <= 180)
+            ):
+                raise ValueError
+        except (TypeError, ValueError):
+            skipped_count += 1
+            continue
+        parsed_bins.append({
+            'name': name,
+            'description': description,
+            'lat': lat,
+            'lng': lng,
+            'waste_types': waste_types,
+            'bin_status': bin_status,
+        })
+
+    if not parsed_bins:
+        flash('有効なごみ箱データ行が見つかりませんでした。列名（設置場所名,住所・説明,緯度,経度）を確認してください。', 'error')
+        return redirect(url_for('admin_bins'))
+
+    inserted = 0
+    updated = 0
+    conn = get_db()
+    try:
+        with conn:
+            for item in parsed_bins:
+                existing = conn.execute(
+                    'SELECT id FROM trash_bins WHERE name = ?', (item['name'],)
+                ).fetchone()
+                if existing:
+                    conn.execute('''
+                        UPDATE trash_bins
+                        SET description = ?, lat = ?, lng = ?,
+                            waste_types = ?, bin_status = ?
+                        WHERE id = ?
+                    ''', (
+                        item['description'], item['lat'], item['lng'],
+                        item['waste_types'], item['bin_status'], existing['id'],
+                    ))
+                    updated += 1
+                else:
+                    conn.execute('''
+                        INSERT INTO trash_bins (
+                            name, description, lat, lng, waste_types, bin_status
+                        ) VALUES (?, ?, ?, ?, ?, ?)
+                    ''', (
+                        item['name'], item['description'], item['lat'], item['lng'],
+                        item['waste_types'], item['bin_status'],
+                    ))
+                    inserted += 1
+    finally:
+        conn.close()
+
+    msg = f'CSVインポート完了：新規登録 {inserted} 件 / 更新 {updated} 件'
+    if skipped_count:
+        msg += f'（無効行スキップ {skipped_count} 件）'
+    flash(msg, 'success')
+    return redirect(url_for('admin_bins'))
+
 # ==========================================
 # アクセス範囲の整理: 管理者専用一覧
 # ==========================================
@@ -6971,24 +7640,41 @@ def admin_events():
 
 def _prefill_event_from_issue(event_values):
     from_issue_id = request.args.get('from_issue', type=int)
-    if not from_issue_id:
+    from_case_id = request.args.get('from_case', type=int)
+    if not from_issue_id and not from_case_id:
         return
     conn = get_db()
     try:
-        issue = conn.execute(
-            'SELECT * FROM issue_reports WHERE id = ?', (from_issue_id,)
-        ).fetchone()
-        if issue:
-            event_values.update({
-                'name': f"{issue['location']} 課題解決クリーンイベント",
-                'location': issue['location'],
-                'latitude': issue['latitude'] if issue['latitude'] is not None else '',
-                'longitude': issue['longitude'] if issue['longitude'] is not None else '',
-                'purpose_issue': (
-                    f"地域課題報告「{issue['title']}（{issue['trash_type']}）」への対応。"
-                    + (f" {issue['description']}" if issue['description'] else '')
-                )[:500],
-            })
+        if from_issue_id:
+            issue = conn.execute(
+                'SELECT * FROM issue_reports WHERE id = ?', (from_issue_id,)
+            ).fetchone()
+            if issue:
+                event_values.update({
+                    'name': f"{issue['location']} 課題解決クリーンイベント",
+                    'location': issue['location'],
+                    'latitude': issue['latitude'] if issue['latitude'] is not None else '',
+                    'longitude': issue['longitude'] if issue['longitude'] is not None else '',
+                    'purpose_issue': (
+                        f"地域課題報告「{issue['title']}（{issue['trash_type']}）」への対応。"
+                        + (f" {issue['description']}" if issue['description'] else '')
+                    )[:500],
+                })
+        elif from_case_id:
+            kb_case = conn.execute(
+                'SELECT * FROM regional_knowledge_cases WHERE id = ?',
+                (from_case_id,),
+            ).fetchone()
+            if kb_case:
+                region_prof = get_region_profile(conn)
+                event_values.update({
+                    'name': f"{region_prof['region_name']} 知見活用クリーンイベント"[:100],
+                    'location': region_prof['region_name'],
+                    'purpose_issue': (
+                        f"地域間知見「{kb_case['title']}（{kb_case['region_name']}）」を参考にした企画。"
+                        f" 対策内容：{kb_case['action_taken']}"
+                    )[:500],
+                })
     finally:
         conn.close()
 

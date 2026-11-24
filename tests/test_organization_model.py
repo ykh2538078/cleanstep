@@ -12,7 +12,7 @@ import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from io import BytesIO, StringIO
-from contextlib import contextmanager, redirect_stdout
+from contextlib import closing, contextmanager, redirect_stdout
 from pathlib import Path
 import sys
 from unittest.mock import patch
@@ -173,8 +173,8 @@ class OrganizationModelTests(unittest.TestCase):
         self._test_database_path = Path(self._test_database_dir.name) / 'test.db'
 
         # SQLite backup APIで整合性を保った状態のDBコピーを作る。
-        with sqlite3.connect(self._baseline_database) as source_conn:
-            with sqlite3.connect(self._test_database_path) as target_conn:
+        with closing(sqlite3.connect(self._baseline_database)) as source_conn:
+            with closing(sqlite3.connect(self._test_database_path)) as target_conn:
                 source_conn.backup(target_conn)
 
         cleanstep.DATABASE = str(self._test_database_path)
@@ -5278,6 +5278,147 @@ class OrganizationModelTests(unittest.TestCase):
                 )
                 conn.execute(
                     "DELETE FROM user_notifications WHERE title LIKE '%海岸遊歩道のプラ容器散乱%'"
+                )
+
+    def test_step1_and_step2_csv_export_import_and_issue_image_admin_access(self):
+        self._login_as(2, "admin")
+        csv_content = (
+            "設置場所名,住所・説明,緯度,経度,分別区分,稼働状態\r\n"
+            "CSV連携テスト第1ごみ箱,市役所北口広場,35.450123,139.634567,ペットボトル・空き缶,通常稼働\r\n"
+            "CSV連携テスト第2ごみ箱,商店街アーケード入口,35.451234,139.635678,プラ容器・カップ,満杯報告あり\r\n"
+        ).encode("utf-8-sig")
+        try:
+            import_resp = self.client.post(
+                "/admin/bins/import-csv",
+                data={
+                    "csrf_token": "test-csrf-token",
+                    "csv_file": (BytesIO(csv_content), "bins_import.csv"),
+                },
+                content_type="multipart/form-data",
+                follow_redirects=True,
+            )
+            self.assertEqual(import_resp.status_code, 200)
+            import_html = import_resp.get_data(as_text=True)
+            self.assertIn("CSVインポート完了：新規登録 2 件", import_html)
+            self.assertIn("CSV連携テスト第1ごみ箱", import_html)
+            self.assertIn("CSV連携テスト第2ごみ箱", import_html)
+
+            bins_csv_resp = self.client.get("/admin/export/bins.csv")
+            self.assertEqual(bins_csv_resp.status_code, 200)
+            self.assertIn("text/csv", bins_csv_resp.content_type)
+            bins_csv_text = bins_csv_resp.data.decode("utf-8-sig")
+            self.assertIn("CSV連携テスト第1ごみ箱", bins_csv_text)
+            self.assertIn("full_reported", bins_csv_text)
+
+            issues_csv_resp = self.client.get("/admin/export/issues.csv")
+            self.assertEqual(issues_csv_resp.status_code, 200)
+            self.assertIn("現地確認後の環境変化", issues_csv_resp.data.decode("utf-8-sig"))
+
+            activities_csv_resp = self.client.get("/admin/export/activities.csv")
+            self.assertEqual(activities_csv_resp.status_code, 200)
+            self.assertIn("確定回収個数", activities_csv_resp.data.decode("utf-8-sig"))
+        finally:
+            with database_connection() as conn:
+                conn.execute(
+                    "DELETE FROM trash_bins WHERE name LIKE 'CSV連携テスト%'"
+                )
+
+    def test_step3_region_profile_customization_and_propagation(self):
+        self._login_as(2, "admin")
+        try:
+            admin_dash = self.client.get("/admin/dashboard")
+            self.assertEqual(admin_dash.status_code, 200)
+            self.assertIn("自治体・地域プロファイル設定", admin_dash.get_data(as_text=True))
+
+            update_resp = self.client.post(
+                "/admin/settings/region-profile",
+                data={
+                    "csrf_token": "test-csrf-token",
+                    "region_name": "日田・豆田町モデル商店街",
+                    "region_type": "shopping_urban",
+                    "region_local_reward_label": "商店街レトロカフェ＆土産店クーポン連携",
+                    "region_custom_message": "観光街歩きの食べ歩き容器回収を商店街全体で推進中",
+                },
+                follow_redirects=True,
+            )
+            self.assertEqual(update_resp.status_code, 200)
+            update_html = update_resp.get_data(as_text=True)
+            self.assertIn("日田・豆田町モデル商店街", update_html)
+            self.assertIn("商店街・市街地", update_html)
+
+            self._login_as(1)
+            home_resp = self.client.get("/home")
+            self.assertEqual(home_resp.status_code, 200)
+            home_html = home_resp.get_data(as_text=True)
+            self.assertIn("日田・豆田町モデル商店街（商店街・市街地）", home_html)
+            self.assertIn("観光街歩きの食べ歩き容器回収を商店街全体で推進中", home_html)
+
+            exchange_resp = self.client.get("/exchange")
+            self.assertEqual(exchange_resp.status_code, 200)
+            self.assertIn("商店街レトロカフェ＆土産店クーポン連携", exchange_resp.get_data(as_text=True))
+        finally:
+            with database_connection() as conn:
+                conn.execute(
+                    """
+                    DELETE FROM app_settings
+                    WHERE setting_key IN (
+                        'region_name', 'region_type',
+                        'region_custom_message', 'region_local_reward_label'
+                    )
+                    """
+                )
+
+    def test_step4_regional_knowledge_base_search_add_and_prefill_flows(self):
+        self._login_as(1)
+        try:
+            kb_resp = self.client.get("/knowledge-base")
+            self.assertEqual(kb_resp.status_code, 200)
+            kb_html = kb_resp.get_data(as_text=True)
+            self.assertIn("地域間知見循環アーカイブ", kb_html)
+            self.assertIn("食べ歩き商店街でのごみ箱単体増設による分別混乱と写真付き案内への改善", kb_html)
+            self.assertIn("失敗・改善からの学び", kb_html)
+
+            filter_resp = self.client.get("/knowledge-base?region_type=rural_nature&outcome_status=improved")
+            self.assertEqual(filter_resp.status_code, 200)
+            filter_html = filter_resp.get_data(as_text=True)
+            self.assertIn("箕面・河川里山モデル地区", filter_html)
+
+            with database_connection() as conn:
+                case_id = conn.execute(
+                    "SELECT id FROM regional_knowledge_cases ORDER BY id LIMIT 1"
+                ).fetchone()["id"]
+
+            prop_prefill = self.client.get(f"/proposals?from_case={case_id}")
+            self.assertEqual(prop_prefill.status_code, 200)
+            self.assertIn("【他地域知見活用】", prop_prefill.get_data(as_text=True))
+
+            org_event_prefill = self.client.get(f"/organizer/events/new?from_case={case_id}")
+            self.assertEqual(org_event_prefill.status_code, 200)
+            self.assertIn("知見活用クリーンイベント", org_event_prefill.get_data(as_text=True))
+
+            self._login_as(2, "admin")
+            add_case_resp = self.client.post(
+                "/knowledge-base",
+                data={
+                    "csrf_token": "test-csrf-token",
+                    "region_name": "テスト沿岸観光市",
+                    "region_type": "coastal_tourism",
+                    "title": "テスト海岸プロムナードの夜間カップ散乱対策知見",
+                    "issue_summary": "夜間イベント後にプラカップがベンチ下に残置されていた",
+                    "proposal_type": "分別案内・啓発サインの設置",
+                    "action_taken": "蓄光式の分別案内サインとイベント終了時の5分声かけを実施",
+                    "outcome_status": "improved",
+                    "outcome_note": "現地確認で翌朝の残置ごみが8割減少",
+                    "lesson_learned": "夜間照明が暗い場所では蓄光サインの視認性が大きく効く",
+                },
+                follow_redirects=True,
+            )
+            self.assertEqual(add_case_resp.status_code, 200)
+            self.assertIn("テスト海岸プロムナードの夜間カップ散乱対策知見", add_case_resp.get_data(as_text=True))
+        finally:
+            with database_connection() as conn:
+                conn.execute(
+                    "DELETE FROM regional_knowledge_cases WHERE title = 'テスト海岸プロムナードの夜間カップ散乱対策知見'"
                 )
 
 

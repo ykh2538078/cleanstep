@@ -44,6 +44,11 @@
     <div class="header">
         <h1>🗺️ CleanStep 地域マップ</h1>
         <p>エコごみ箱の位置・地域課題の報告地点・開催予定の清掃イベント</p>
+        {% if region_profile %}
+            <div style="margin-top:8px; display:inline-block; padding:5px 12px; border-radius:999px; background:rgba(255,255,255,0.18); font-size:12px; font-weight:700;">
+                {{ region_profile.icon }} {{ region_profile.region_name }}（{{ region_profile.label }}）｜ 重点課題：{{ region_profile.focus_areas }}
+            </div>
+        {% endif %}
     </div>
     {% include "_user_page_back.html" %}
 
@@ -69,6 +74,7 @@
                 <span>🚩 未解決の地域課題：<strong>{{ open_issues_count }} 件</strong></span>
                 <span>🗑️ 満杯報告のあるごみ箱：<strong style="color:{{ '#b91c1c' if full_bins_count else '#15803d' }};">{{ full_bins_count }} か所</strong></span>
                 <a href="{{ url_for('improvement_proposals_board') }}" style="color:#17633f; font-weight:700; text-decoration:underline;">💡 地域改善提案ボードを開く →</a>
+                <a href="{{ url_for('regional_knowledge_base') }}" style="color:#0369a1; font-weight:700; text-decoration:underline;">📚 地域間知見アーカイブ（類似地域の解決事例） →</a>
             </div>
             {% if hotspot_locations %}
                 <div style="display:flex; flex-wrap:wrap; gap:10px;">
@@ -94,11 +100,14 @@
                             <span class="map-item-meta">
                                 📍 {{ bin.description }}<br>
                                 ♻️ 分別：{{ bin.waste_types or 'ペットボトル・カップ・容器' }} |
-                                状態：{% if bin.bin_status == 'full_reported' %}<strong style="color:#b91c1c;">満杯報告あり</strong>{% else %}利用可能{% endif %} |
+                                状態：{% if bin.bin_status == 'full_reported' %}<strong style="color:#b91c1c;">満杯報告あり</strong>{% elif bin.bin_status == 'maintenance' %}<strong style="color:#92400e;">点検・回収中</strong>{% else %}利用可能{% endif %} |
                                 投函実績 {{ bin.usage_count }}回
                             </span>
+                            <div class="issue-actions">
+                                <a class="action-link" href="{{ url_for('trash_bin', bin_id=bin.id) }}">ここで捨てる</a>
+                                <a class="action-link" style="background:#e67e22;" href="{{ url_for('issue_report_new', report_type='bin_problem', bin_id=bin.id) }}">⚠️ 満杯・破損を報告</a>
+                            </div>
                         </div>
-                        <a class="action-link" href="{{ url_for('trash_bin', bin_id=bin.id) }}">ここで捨てる</a>
                     </div>
                 {% else %}
                     <p class="empty">登録されているエコごみ箱はまだありません。</p>
@@ -119,6 +128,13 @@
                                 {% if issue.ai_detected_count is not none %} | 🤖 AI推定 {{ issue.ai_detected_count }}個{% endif %}
                                 {% if issue.description %}<br>{{ issue.description }}{% endif %}
                             </span>
+                            {% if issue.image_path %}
+                                <div style="margin-top:8px;">
+                                    <a href="{{ url_for('issue_report_image', issue_id=issue.id) }}" target="_blank" rel="noopener">
+                                        <img src="{{ url_for('issue_report_image', issue_id=issue.id) }}" alt="{{ issue.title }}の現場写真" style="max-width:140px; max-height:96px; border-radius:8px; border:1px solid #dce5e1; object-fit:cover; display:block;">
+                                    </a>
+                                </div>
+                            {% endif %}
                             <div class="issue-actions">
                                 <a class="action-link" href="{{ issue.proposal_url }}">💡 この課題から改善提案</a>
                                 {% if is_organizer %}
@@ -195,7 +211,7 @@
                 if (typeof bin.lat === 'number' && typeof bin.lng === 'number') {
                     const marker = L.circleMarker([bin.lat, bin.lng], {
                         radius: 10, color: '#0284c7', fillColor: '#38bdf8', fillOpacity: 0.9
-                    }).bindPopup(`<strong>🗑️ ${bin.name}</strong><br>${bin.description}<br><a href="/trash-bin?bin_id=${bin.id}">ここでごみを捨てる</a>`);
+                    }).bindPopup(`<strong>🗑️ ${bin.name}</strong><br>${bin.description}<br><a href="/trash-bin?bin_id=${bin.id}">ここでごみを捨てる</a> · <a href="/issues/report?report_type=bin_problem&bin_id=${bin.id}">満杯・破損を報告</a>`);
                     layers.bins.addLayer(marker);
                     bounds.push([bin.lat, bin.lng]);
                 }

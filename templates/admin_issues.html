@@ -45,6 +45,13 @@
         </p>
         <h1>🚩 地域課題・改善提案・場所別再発分析レポート</h1>
         <p>住民から報告された地域課題、ごみ種類別の傾向、活動前後の状態変化（再発状況）、および改善アクションプランを一元管理します。</p>
+        {% if is_admin %}
+            <p style="margin: 10px 0 18px;">
+                <a href="{{ url_for('admin_export_issues_csv') }}" style="display:inline-block; padding:9px 14px; border-radius:6px; background:#257a52; color:#fff; text-decoration:none; font-size:13px; font-weight:700;">
+                    📥 課題報告データをCSV出力（自治体システム連携）
+                </a>
+            </p>
+        {% endif %}
 
         {% for category, message in get_flashed_messages(with_categories=true) %}
             <div class="flash-msg" role="status">{{ message }}</div>
@@ -282,6 +289,13 @@
                             </td>
                             <td>
                                 {{ issue.description or '—' }}
+                                {% if issue.image_path %}
+                                    <div style="margin-top:6px;">
+                                        <a href="{{ url_for('issue_report_image', issue_id=issue.id) }}" target="_blank" rel="noopener">
+                                            <img src="{{ url_for('issue_report_image', issue_id=issue.id) }}" alt="課題報告 #{{ issue.id }} の添付写真" style="max-width:120px; max-height:84px; border-radius:6px; border:1px solid #cbd5e1; object-fit:cover; display:block;">
+                                        </a>
+                                    </div>
+                                {% endif %}
                                 {% if issue.action_note %}
                                     <div style="margin-top:4px; color:#166534; font-size:12px;">対応メモ: {{ issue.action_note }}</div>
                                 {% endif %}

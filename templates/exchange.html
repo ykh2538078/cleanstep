@@ -73,6 +73,13 @@
             <span class="points-amount" id="current_balance">{{ user['total_points'] }} pt</span>
         </div>
 
+        {% if region_profile %}
+            <div style="background:#eef7f1; border:1px solid #ccebdd; color:#17633f; padding:12px 16px; border-radius:10px; margin-bottom:20px; text-align:left; font-size:13px; line-height:1.5;">
+                <strong>{{ region_profile.icon }} {{ region_profile.region_name }}（{{ region_profile.label }}）特典連携テーマ：</strong><br>
+                {{ region_profile.effective_reward_theme }}
+            </div>
+        {% endif %}
+
         <div class="reward-list">
             {% for reward in rewards %}
                 <div class="reward-card">
