@@ -127,6 +127,11 @@
                                 📍 {{ issue.location }}
                                 {% if issue.ai_detected_count is not none %} | 🤖 AI推定 {{ issue.ai_detected_count }}個{% endif %}
                                 {% if issue.description %}<br>{{ issue.description }}{% endif %}
+                                {% if issue.action_note %}
+                                    <div style="margin-top: 6px; padding: 6px 10px; border-radius: 6px; background: #eef7f1; border-left: 3px solid #257a52; color: #17633f; font-size: 12px; font-weight: 600;">
+                                        💬 管理者からの対応メモ：{{ issue.action_note }}
+                                    </div>
+                                {% endif %}
                             </span>
                             {% if issue.image_path %}
                                 <div style="margin-top:8px;">
