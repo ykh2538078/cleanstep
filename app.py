@@ -28,10 +28,14 @@ from PIL import Image
 
 load_dotenv(encoding='utf-8-sig')
 
-# YOLOv8をインポート
+# YOLOv8をインポート（設定ファイル保存先をプロジェクト配下に向けて権限エラーを回避）
+os.environ.setdefault(
+    'YOLO_CONFIG_DIR',
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data'),
+)
 try:
     from ultralytics import YOLO
-except ImportError:
+except (ImportError, OSError):
     YOLO = None
 
 app = Flask(__name__)
@@ -574,7 +578,9 @@ def init_db():
                     role TEXT,
                     total_points INTEGER DEFAULT 0 CHECK(total_points >= 0),
                     login_destination TEXT NOT NULL DEFAULT 'user'
-                        CHECK(login_destination IN ('user', 'organizer'))
+                        CHECK(login_destination IN ('user', 'organizer')),
+                        is_active INTEGER NOT NULL DEFAULT 1
+                            CHECK(is_active IN (0, 1))
                 )
             ''')
         # 2. イベントテーブルの作成
@@ -593,6 +599,11 @@ def init_db():
                 ALTER TABLE users ADD COLUMN onboarding_completed INTEGER NOT NULL
                     DEFAULT 0 CHECK(onboarding_completed IN (0, 1))
             ''')
+        if 'is_active' not in user_columns:
+            conn.execute('''
+                ALTER TABLE users ADD COLUMN is_active INTEGER NOT NULL
+                    DEFAULT 1 CHECK(is_active IN (0, 1))
+        ''')
         conn.execute('''
             CREATE TABLE IF NOT EXISTS auth_rate_limits (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1843,11 +1854,11 @@ def user_required(func):
         conn = get_db()
         try:
             user = conn.execute(
-                'SELECT role FROM users WHERE id = ?', (user_id,)
+                'SELECT role, is_active FROM users WHERE id = ?', (user_id,)
             ).fetchone()
         finally:
             conn.close()
-        if not user or user['role'] != 'user':
+        if not user or user['role'] != 'user' or not user['is_active']:
             session.clear()
             return redirect(url_for('login'))
         return func(*args, **kwargs)
@@ -1876,11 +1887,11 @@ def admin_required(func):
         conn = get_db()
         try:
             user = conn.execute(
-                'SELECT role FROM users WHERE id = ?', (user_id,)
+                'SELECT role, is_active FROM users WHERE id = ?', (user_id,)
             ).fetchone()
         finally:
             conn.close()
-        if not user or user['role'] != 'admin':
+        if not user or user['role'] != 'admin' or not user['is_active']:
             session.clear()
             return redirect(url_for('login'))
         return func(*args, **kwargs)
@@ -1896,9 +1907,9 @@ def organizer_required(func):
         conn = get_db()
         try:
             user = conn.execute(
-                'SELECT role FROM users WHERE id = ?', (user_id,)
+                'SELECT role, is_active FROM users WHERE id = ?', (user_id,)
             ).fetchone()
-            if not user or user['role'] != 'user':
+            if not user or user['role'] != 'user' or not user['is_active']:
                 session.clear()
                 return redirect(url_for('login'))
             organization_id = get_user_organization_id(conn, user_id)
@@ -2251,6 +2262,9 @@ def login():
                     ),
                     None,
                 )
+
+                if user and not user['is_active']:
+                    user = None
 
                 if not user:
                     _record_auth_attempt(conn, email_rate_key)
@@ -3606,9 +3620,9 @@ def regional_knowledge_base():
     conn = get_db()
     try:
         account = conn.execute(
-            'SELECT role FROM users WHERE id = ?', (user_id,)
+            'SELECT role, is_active FROM users WHERE id = ?', (user_id,)
         ).fetchone()
-        if not account or account['role'] != role:
+        if not account or account['role'] != role or not account['is_active']:
             session.clear()
             return redirect(url_for('login'))
 
@@ -5607,9 +5621,9 @@ def issue_report_image(issue_id):
     conn = get_db()
     try:
         account = conn.execute(
-            'SELECT role FROM users WHERE id = ?', (user_id,)
+            'SELECT role, is_active FROM users WHERE id = ?', (user_id,)
         ).fetchone()
-        if not account or account['role'] != role:
+        if not account or account['role'] != role or not account['is_active']:
             session.clear()
             return redirect(url_for('login'))
         issue = conn.execute(
@@ -7310,7 +7324,21 @@ def admin_users():
                 u.name,
                 u.email,
                 u.role,
+                u.is_active,
                 u.login_destination,
+                CASE
+                    WHEN u.role = 'admin' THEN '管理者'
+                    WHEN u.login_destination = 'organizer'
+                         OR EXISTS (
+                             SELECT 1
+                             FROM organization_members om
+                             JOIN organizations o ON o.id = om.organization_id
+                             WHERE om.user_id = u.id
+                               AND om.status = 'active'
+                               AND o.status = 'approved'
+                         ) THEN '団体'
+                    ELSE 'ユーザー'
+                END AS user_type,
                 u.total_points,
                 COALESCE((SELECT SUM(points_earned) FROM activity_history WHERE user_id = u.id AND date(date, '+9 hours') = date('now', '+9 hours')), 0) AS today_points,
                 COALESCE((SELECT COUNT(*) FROM activity_history WHERE user_id = u.id), 0) AS action_count,
@@ -7335,9 +7363,9 @@ def admin_user_login_destination(user_id):
     conn = get_db()
     try:
         user = conn.execute(
-            'SELECT role FROM users WHERE id = ?', (user_id,)
+            'SELECT role, is_active FROM users WHERE id = ?', (user_id,)
         ).fetchone()
-        if not user or user['role'] != 'user':
+        if not user or user['role'] != 'user' or not user['is_active']:
             return '対象のユーザーが見つかりません。', 404
         if destination == 'organizer' and not get_user_organization_id(conn, user_id):
             return '承認済み団体のメンバーのみ団体画面をログイン先に設定できます。', 409
@@ -7349,6 +7377,270 @@ def admin_user_login_destination(user_id):
         return redirect(url_for('admin_users'))
     finally:
         conn.close()
+
+
+@app.route('/admin/users/<int:user_id>/toggle-status', methods=['POST'])
+@admin_required
+def admin_user_toggle_status(user_id):
+    if not validate_csrf():
+        return 'CSRFトークンが不正です。', 400
+    if user_id == session.get('user_id'):
+        flash('自分自身のアカウントは停止できません。', 'error')
+        return redirect(url_for('admin_users'))
+
+    conn = get_db()
+    try:
+        user = conn.execute(
+            'SELECT id, name, role, is_active FROM users WHERE id = ?',
+            (user_id,),
+        ).fetchone()
+        if not user or user['role'] != 'user':
+            flash('対象のユーザーが見つかりません。', 'error')
+            return redirect(url_for('admin_users'))
+
+        new_status = 0 if user['is_active'] else 1
+        with conn:
+            conn.execute(
+                "UPDATE users SET is_active = ? WHERE id = ? AND role = 'user'",
+                (new_status, user_id),
+            )
+        flash(
+            f"ユーザー「{user['name']}」を{'アクティブに' if new_status else '停止'}しました。",
+            'success',
+        )
+        return redirect(url_for('admin_users'))
+    finally:
+        conn.close()
+
+
+@app.route('/admin/users/<int:user_id>/history')
+@admin_required
+def admin_user_history(user_id):
+    conn = get_db()
+    try:
+        user = conn.execute(
+            'SELECT id, name, email, total_points, is_active FROM users WHERE id = ?',
+            (user_id,),
+        ).fetchone()
+        if not user:
+            return {'error': 'ユーザーが見つかりません'}, 404
+        activities = [
+            {
+                'date_jst': format_jst_datetime(row['date']),
+                'title': row['title'],
+                'type': row['type'],
+                'points_earned': row['points_earned'] or 0,
+                'trash_count': row['trash_count'] or 0,
+            }
+            for row in conn.execute('''
+                SELECT date, title, type, points_earned, trash_count
+                FROM activity_history
+                WHERE user_id = ?
+                ORDER BY date DESC, id DESC
+                LIMIT 50
+            ''', (user_id,)).fetchall()
+        ]
+        reservations = [
+            {
+                'event_date': row['event_date'] or '-',
+                'reserved_at_jst': format_jst_datetime(row['reserved_at']),
+                'event_title': row['event_title'] or 'イベント',
+                'location': row['location'] or '-',
+                'participant_role': row['participant_role'] or '-',
+            }
+            for row in conn.execute('''
+                SELECT e.datetime AS event_date, r.reserved_at,
+                       e.name AS event_title, e.location, r.participant_role
+                FROM event_reservations r
+                JOIN events e ON e.id = r.event_id
+                WHERE r.user_id = ? AND r.status != 'cancelled'
+                ORDER BY r.reserved_at DESC, r.id DESC
+                LIMIT 30
+            ''', (user_id,)).fetchall()
+        ]
+        return {
+            'user': {
+                'id': user['id'],
+                'name': user['name'],
+                'email': user['email'],
+                'total_points': user['total_points'],
+                'is_active': bool(user['is_active']),
+            },
+            'activities': activities,
+            'reservations': reservations,
+        }
+    finally:
+        conn.close()
+
+
+@app.route('/admin/users/<int:user_id>/edit', methods=['POST'])
+@admin_required
+def admin_user_edit(user_id):
+    if not validate_csrf():
+        return 'CSRFトークンが不正です。', 400
+    name = (request.form.get('name') or '').strip()
+    email = (request.form.get('email') or '').strip().lower()
+    password = request.form.get('password') or ''
+    password_confirm = request.form.get('password_confirm') or ''
+
+    if not name or len(name) > 80 or not email or len(email) > 254:
+        flash('ユーザー名とメールアドレスを正しく入力してください。', 'error')
+        return redirect(url_for('admin_users'))
+    if password or password_confirm:
+        if password != password_confirm or len(password) < 4:
+            flash('パスワードは4文字以上で、確認用と一致させてください。', 'error')
+            return redirect(url_for('admin_users'))
+
+    conn = get_db()
+    try:
+        target = conn.execute(
+            'SELECT id, name FROM users WHERE id = ?', (user_id,)
+        ).fetchone()
+        if not target:
+            flash('対象のユーザーが見つかりません。', 'error')
+            return redirect(url_for('admin_users'))
+        duplicate = conn.execute(
+            'SELECT id FROM users WHERE lower(email) = ? AND id != ?',
+            (email, user_id),
+        ).fetchone()
+        if duplicate:
+            flash('そのメールアドレスは既に他のユーザーに使用されています。', 'error')
+            return redirect(url_for('admin_users'))
+        with conn:
+            if password:
+                conn.execute(
+                    'UPDATE users SET name = ?, email = ?, password = ? WHERE id = ?',
+                    (name, email, generate_password_hash(password), user_id),
+                )
+            else:
+                conn.execute(
+                    'UPDATE users SET name = ?, email = ? WHERE id = ?',
+                    (name, email, user_id),
+                )
+        flash(f'ユーザー「{name}」の情報を更新しました。', 'success')
+        return redirect(url_for('admin_users'))
+    finally:
+        conn.close()
+
+
+@app.route('/admin/users/<int:user_id>/delete', methods=['POST'])
+@admin_required
+def admin_user_delete(user_id):
+    if not validate_csrf():
+        return 'CSRFトークンが不正です。', 400
+    if user_id == session.get('user_id'):
+        flash('自分自身のアカウントは削除できません。', 'error')
+        return redirect(url_for('admin_users'))
+
+    conn = get_db()
+    try:
+        target = conn.execute(
+            'SELECT id, name, role FROM users WHERE id = ?', (user_id,)
+        ).fetchone()
+        if not target or target['role'] == 'admin':
+            flash('対象のユーザーを削除できません。', 'error')
+            return redirect(url_for('admin_users'))
+        with conn:
+            for table, col in (
+                ('events', 'organizer_id'),
+                ('events', 'reviewed_by'),
+                ('issue_reports', 'reviewed_by'),
+                ('issue_reports', 'environment_checked_by'),
+                ('issue_status_history', 'changed_by'),
+                ('event_feedback', 'reviewed_by'),
+                ('organizer_applications', 'reviewed_by'),
+                ('organizations', 'approved_by'),
+                ('activity_verifications', 'reviewer2_id'),
+                ('activity_verifications', 'adjudicator_id'),
+            ):
+                try:
+                    conn.execute(f'UPDATE {table} SET {col} = NULL WHERE {col} = ?', (user_id,))
+                except sqlite3.OperationalError:
+                    pass
+            try:
+                conn.execute('''
+                    DELETE FROM activity_verifications
+                    WHERE reviewer_id = ?
+                       OR activity_id IN (SELECT id FROM activity_history WHERE user_id = ?)
+                       OR ai_log_id IN (SELECT id FROM ai_logs WHERE user_id = ?)
+                ''', (user_id, user_id, user_id))
+                conn.execute('''
+                    DELETE FROM activity_verification_history
+                    WHERE reviewer_id = ?
+                       OR activity_id IN (SELECT id FROM activity_history WHERE user_id = ?)
+                       OR ai_log_id IN (SELECT id FROM ai_logs WHERE user_id = ?)
+                ''', (user_id, user_id, user_id))
+            except sqlite3.OperationalError:
+                pass
+            for table, col in (
+                ('improvement_proposal_supports', 'user_id'),
+                ('improvement_proposals', 'user_id'),
+                ('issue_reports', 'user_id'),
+                ('event_feedback', 'user_id'),
+                ('event_reservations', 'user_id'),
+                ('user_notifications', 'user_id'),
+                ('activity_point_history', 'user_id'),
+                ('activity_point_history', 'changed_by'),
+                ('ai_duplicate_attempts', 'user_id'),
+                ('ai_logs', 'user_id'),
+                ('activity_history', 'user_id'),
+                ('reward_history', 'user_id'),
+                ('organization_members', 'user_id'),
+                ('organizer_applications', 'user_id'),
+            ):
+                try:
+                    conn.execute(f'DELETE FROM {table} WHERE {col} = ?', (user_id,))
+                except sqlite3.OperationalError:
+                    pass
+            conn.execute("DELETE FROM users WHERE id = ? AND role != 'admin'", (user_id,))
+        flash(f"ユーザー「{target['name']}」を削除しました。", 'success')
+        return redirect(url_for('admin_users'))
+    finally:
+        conn.close()
+
+
+@app.route('/admin/users/<int:user_id>/status', methods=['POST'])
+@admin_required
+def admin_user_status(user_id):
+    if not validate_csrf():
+        return 'CSRFトークンが不正です。', 400
+
+    action = request.form.get('action', '')
+
+    if action not in ('suspend', 'activate'):
+        return '操作の指定が正しくありません。', 400
+
+    # 自分自身の停止を防止
+    if user_id == session.get('user_id'):
+        return '自分自身のアカウントは変更できません。', 403
+
+    conn = get_db()
+    try:
+        user = conn.execute(
+            'SELECT id, role, is_active FROM users WHERE id = ?',
+            (user_id,)
+        ).fetchone()
+
+        # 管理者アカウントはこの画面から変更させない
+        if not user or user['role'] != 'user':
+            return '対象のユーザーが見つかりません。', 404
+
+        new_status = 0 if action == 'suspend' else 1
+
+        with conn:
+            conn.execute(
+                '''
+                UPDATE users
+                SET is_active = ?
+                WHERE id = ? AND role = 'user'
+                ''',
+                (new_status, user_id)
+            )
+
+        return redirect(url_for('admin_users'))
+    finally:
+        conn.close()
+
 
 @app.route('/admin/bins')
 @admin_required

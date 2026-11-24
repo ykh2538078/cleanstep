@@ -101,6 +101,7 @@
             border-radius: 6px;
             border: none;
             font-weight: 700;
+            font-size: 0.85rem;
             cursor: pointer;
         }
         .btn-delete {
@@ -110,12 +111,13 @@
             border-radius: 6px;
             border: none;
             font-weight: 700;
+            font-size: 0.85rem;
             cursor: pointer;
         }
-        .btn-edit:hover {
+        .btn-edit:hover:not(:disabled) {
             background-color: #1f6a8a;
         }
-        .btn-delete:hover {
+        .btn-delete:hover:not(:disabled) {
             background-color: #a93226;
         }
 
@@ -127,9 +129,206 @@
             border-radius: 6px;
             border: none;
             font-weight: 700;
+            font-size: 0.85rem;
             cursor: pointer;
         }
-        .btn-history:hover {
+        .btn-history:hover:not(:disabled) {
+            background-color: #256f33;
+        }
+
+        /* 🌱 停止・アクティブボタン */
+        .btn-status {
+            padding: 6px 12px;
+            border-radius: 6px;
+            border: none;
+            font-weight: 700;
+            font-size: 0.85rem;
+            cursor: pointer;
+            transition: background-color 0.15s ease;
+        }
+        .btn-suspend {
+            background-color: #e67e22;
+            color: #fff;
+        }
+        .btn-suspend:hover {
+            background-color: #d35400;
+        }
+        .btn-activate {
+            background-color: #27ae60;
+            color: #fff;
+        }
+        .btn-activate:hover {
+            background-color: #219653;
+        }
+        .btn-disabled {
+            background-color: #e2e8f0;
+            color: #94a3b8;
+            cursor: not-allowed;
+            border: 1px solid #cbd5e1;
+        }
+
+        /* 🌱 バッジスタイル */
+        .badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 0.8rem;
+            font-weight: 700;
+            line-height: 1.3;
+        }
+        .badge-admin {
+            background-color: #ede9fe;
+            color: #6d28d9;
+            border: 1px solid #ddd6fe;
+        }
+        .badge-organizer {
+            background-color: #e0f2fe;
+            color: #0369a1;
+            border: 1px solid #bae6fd;
+        }
+        .badge-user {
+            background-color: #f1f5f9;
+            color: #475569;
+            border: 1px solid #e2e8f0;
+        }
+        .badge-suspended {
+            background-color: #fee2e2;
+            color: #b91c1c;
+            border: 1px solid #fecaca;
+            font-size: 0.72rem;
+            margin-left: 6px;
+            padding: 2px 7px;
+        }
+
+        /* 🌱 フラッシュメッセージ */
+        .alert {
+            padding: 12px 16px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-weight: 700;
+            font-size: 0.92rem;
+        }
+        .alert-success {
+            background-color: #d1fae5;
+            color: #065f46;
+            border: 1px solid #a7f3d0;
+        }
+        .alert-error {
+            background-color: #fee2e2;
+            color: #991b1b;
+            border: 1px solid #fecaca;
+        }
+
+        /* 🌱 モーダルスタイル */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+            padding: 16px;
+            box-sizing: border-box;
+        }
+        .modal-overlay.active {
+            display: flex;
+        }
+        .modal-box {
+            background: #ffffff;
+            border-radius: 12px;
+            max-width: 680px;
+            width: 100%;
+            max-height: 90vh;
+            overflow-y: auto;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
+            padding: 24px;
+            position: relative;
+        }
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border-gray);
+            padding-bottom: 14px;
+            margin-bottom: 18px;
+        }
+        .modal-title {
+            margin: 0;
+            font-size: 1.25rem;
+            font-weight: 800;
+            color: var(--text-dark);
+        }
+        .modal-close {
+            background: transparent;
+            border: none;
+            font-size: 1.5rem;
+            cursor: pointer;
+            color: var(--text-muted);
+            padding: 0 4px;
+            line-height: 1;
+        }
+        .modal-close:hover {
+            color: var(--text-dark);
+        }
+        .form-group {
+            margin-bottom: 16px;
+        }
+        .form-label {
+            display: block;
+            margin-bottom: 6px;
+            font-weight: 700;
+            font-size: 0.9rem;
+            color: var(--text-dark);
+        }
+        .form-input, .form-select {
+            width: 100%;
+            padding: 9px 12px;
+            border: 1px solid var(--border-gray);
+            border-radius: 6px;
+            font-size: 0.95rem;
+            box-sizing: border-box;
+        }
+        .form-input:focus, .form-select:focus {
+            outline: none;
+            border-color: var(--primary-green);
+            box-shadow: 0 0 0 3px rgba(43, 138, 62, 0.15);
+        }
+        .modal-footer {
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+            margin-top: 24px;
+            border-top: 1px solid var(--border-gray);
+            padding-top: 16px;
+        }
+        .btn-cancel {
+            background-color: #e2e8f0;
+            color: #475569;
+            padding: 8px 16px;
+            border-radius: 6px;
+            border: none;
+            font-weight: 700;
+            font-size: 0.9rem;
+            cursor: pointer;
+        }
+        .btn-cancel:hover {
+            background-color: #cbd5e1;
+        }
+        .btn-save {
+            background-color: var(--primary-green);
+            color: #fff;
+            padding: 8px 20px;
+            border-radius: 6px;
+            border: none;
+            font-weight: 700;
+            font-size: 0.9rem;
+            cursor: pointer;
+        }
+        .btn-save:hover {
             background-color: #256f33;
         }
 
@@ -154,6 +353,16 @@
 
     <div class="container">
 
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ 'error' if category == 'error' else 'success' }}">
+                        {{ message }}
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
         <!-- 🌱 ユーザー一覧カード -->
         <div class="hover-card" style="border-left:5px solid var(--primary-green);">
             <h2 style="font-size:1.3rem; font-weight:800; margin:0;">
@@ -171,35 +380,60 @@
                         <th>今日のポイント</th>
                         <th>活動回数</th>
                         <th>最終利用日</th>
-                        <th>ログイン後の画面</th>
+                        <th>ユーザータイプ</th>
                         <th>操作</th>
                     </tr>
                 </thead>
 
                 <tbody>
                     {% for user in users %}
-                    <tr>
-                        <td>{{ user.name }}</td>
+                    <tr {% if not user.is_active %}style="background-color: #fff8f8;"{% endif %}>
+                        <td>
+                            <strong>{{ user.name }}</strong>
+                            {% if not user.is_active %}
+                                <span class="badge badge-suspended">停止中</span>
+                            {% endif %}
+                        </td>
                         <td>{{ user.total_points }} pt</td>
                         <td>{{ user.today_points }} pt</td>
                         <td>{{ user.action_count }} 回</td>
-                        <td>{{ user.last_active }}</td>
+                        <td>{{ user.last_active or '-' }}</td>
                         <td>
-                            {% if user.role == 'user' %}
-                            <form method="POST" action="{{ url_for('admin_user_login_destination', user_id=user.id) }}">
-                                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                                <select name="login_destination" aria-label="{{ user.name }} のログイン後の画面">
-                                    <option value="user" {% if user.login_destination == 'user' %}selected{% endif %}>ユーザー画面</option>
-                                    <option value="organizer" {% if user.login_destination == 'organizer' %}selected{% endif %}>団体画面</option>
-                                </select>
-                                <button class="btn-edit" type="submit">保存</button>
-                            </form>
-                            {% else %}管理者{% endif %}
+                            {% if user.user_type == '管理者' %}
+                                <span class="badge badge-admin">管理者</span>
+                            {% elif user.user_type == '団体' %}
+                                <span class="badge badge-organizer">団体</span>
+                            {% else %}
+                                <span class="badge badge-user">ユーザー</span>
+                            {% endif %}
                         </td>
                         <td>
-                            <button class="btn-history" type="button" disabled title="操作機能は未実装です">履歴</button>
-                            <button class="btn-edit" type="button" disabled title="操作機能は未実装です">編集</button>
-                            <button class="btn-delete" type="button" disabled title="操作機能は未実装です">削除</button>
+                            <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+                                {% if user.user_type == '管理者' %}
+                                    <button class="btn-history" type="button" onclick="openHistoryModal({{ user.id }}, '{{ user.name|e }}')">履歴</button>
+                                    <button class="btn-edit" type="button" onclick="openEditModal({{ user.id }}, '{{ user.name|e }}', '{{ user.email|e }}', '{{ user.user_type|e }}')">編集</button>
+                                {% else %}
+                                    <button class="btn-history" type="button" onclick="openHistoryModal({{ user.id }}, '{{ user.name|e }}')">履歴</button>
+                                    <button class="btn-edit" type="button" onclick="openEditModal({{ user.id }}, '{{ user.name|e }}', '{{ user.email|e }}', '{{ user.user_type|e }}')">編集</button>
+                                    <form method="POST" action="{{ url_for('admin_user_delete', user_id=user.id) }}" style="display:inline; margin:0;">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                        <button class="btn-delete" type="submit" onclick="return confirm('ユーザー「{{ user.name|e }}」を完全に削除しますか？\n※関連する活動データも削除され、元に戻せません。');">削除</button>
+                                    </form>
+
+                                    {% if user.id != session.user_id %}
+                                    <form method="POST" action="{{ url_for('admin_user_toggle_status', user_id=user.id) }}" style="display:inline; margin:0;">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                        {% if user.is_active %}
+                                        <button class="btn-status btn-suspend" type="submit" onclick="return confirm('「{{ user.name|e }}」のアカウントを停止しますか？\n（ログインできなくなります）');">停止</button>
+                                        {% else %}
+                                        <button class="btn-status btn-activate" type="submit" onclick="return confirm('「{{ user.name|e }}」のアカウントをアクティブにしますか？');">アクティブ</button>
+                                        {% endif %}
+                                    </form>
+                                    {% else %}
+                                    <button class="btn-status btn-disabled" type="button" disabled title="自分自身のアカウントは停止できません">停止</button>
+                                    {% endif %}
+                                {% endif %}
+                            </div>
                         </td>
                     </tr>
                     {% endfor %}
@@ -210,5 +444,242 @@
 
     </div>
 
+    <!-- 🌱 履歴モーダル -->
+    <div id="historyModal" class="modal-overlay">
+        <div class="modal-box">
+            <div class="modal-header">
+                <h3 class="modal-title" id="historyModalTitle">📋 活動履歴</h3>
+                <button type="button" class="modal-close" onclick="closeHistoryModal()">&times;</button>
+            </div>
+            <div id="historyModalBody">
+                <p style="text-align:center; color:var(--text-muted); padding:30px 0;">読み込み中...</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn-cancel" onclick="closeHistoryModal()">閉じる</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 🌱 編集モーダル -->
+    <div id="editModal" class="modal-overlay">
+        <div class="modal-box">
+            <div class="modal-header">
+                <h3 class="modal-title" id="editModalTitle">✏️ ユーザー情報の編集</h3>
+                <button type="button" class="modal-close" onclick="closeEditModal()">&times;</button>
+            </div>
+            <form id="editForm" method="POST" action="" onsubmit="return validateEditForm()">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+               
+                <div class="form-group">
+                    <label class="form-label" for="editName">ユーザー名 <span style="color:var(--danger-red);">*</span></label>
+                    <input type="text" id="editName" name="name" class="form-input" required>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="editEmail">メールアドレス <span style="color:var(--danger-red);">*</span></label>
+                    <input type="email" id="editEmail" name="email" class="form-input" required>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">ユーザータイプ</label>
+                    <div id="editUserTypeDisplay" style="padding: 8px 12px; background: #f8fafc; border: 1px solid var(--border-gray); border-radius: 6px;"></div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="editLoginDestination">ログイン後の画面（承認済み団体メンバー用）</label>
+                    <select id="editLoginDestination" name="login_destination" class="form-select">
+                        <option value="user">ユーザー画面</option>
+                        <option value="organizer">団体画面</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="editPassword">新しいパスワード <span style="font-weight:normal; color:var(--text-muted); font-size:0.85rem;">（変更する場合のみ入力）</span></label>
+                    <input type="password" id="editPassword" name="password" class="form-input" placeholder="空欄のままなら変更されません" autocomplete="new-password">
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="editPasswordConfirm">新しいパスワード（確認用）</label>
+                    <input type="password" id="editPasswordConfirm" name="password_confirm" class="form-input" placeholder="確認のため再入力してください" autocomplete="new-password">
+                </div>
+
+                <div class="modal-footer">
+                    <button type="button" class="btn-cancel" onclick="closeEditModal()">キャンセル</button>
+                    <button type="submit" class="btn-save">保存する</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+<script>
+function escapeHtml(value) {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+// --- 履歴モーダル ---
+async function openHistoryModal(userId, userName) {
+    const modal = document.getElementById('historyModal');
+    const title = document.getElementById('historyModalTitle');
+    const body = document.getElementById('historyModalBody');
+
+    title.innerText = `📋 ${userName} さんの活動履歴`;
+    body.innerHTML = '<p style="text-align:center; color:var(--text-muted); padding:30px 0;">読み込み中...</p>';
+    modal.classList.add('active');
+
+    try {
+        const res = await fetch(`/admin/users/${userId}/history`);
+        if (!res.ok) throw new Error('通信エラーが発生しました');
+        const data = await res.json();
+       
+        let html = `
+            <div style="background:var(--bg-gray); padding:12px 16px; border-radius:8px; margin-bottom:16px; display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px;">
+                <div><strong>メール:</strong> ${escapeHtml(data.user.email || '-')}</div>
+                <div><strong>総ポイント:</strong> <span style="color:var(--primary-green); font-weight:bold;">${Number(data.user.total_points) || 0} pt</span></div>
+                <div><strong>ステータス:</strong> ${data.user.is_active ? 'アクティブ' : '<span style="color:var(--danger-red); font-weight:bold;">停止中</span>'}</div>
+            </div>
+            <h4 style="margin:16px 0 8px 0; font-size:1rem; font-weight:bold;">🌱 清掃・活動記録 (${data.activities ? data.activities.length : 0}件)</h4>
+        `;
+
+        if (data.activities && data.activities.length > 0) {
+            html += `
+                <div style="overflow-x:auto; margin-bottom:16px;">
+                    <table style="width:100%; border-collapse:collapse; font-size:0.85rem; margin-top:5px;">
+                        <thead>
+                            <tr style="background:#f1f5f9;">
+                                <th style="padding:8px; border:1px solid var(--border-gray);">日時</th>
+                                <th style="padding:8px; border:1px solid var(--border-gray);">活動内容</th>
+                                <th style="padding:8px; border:1px solid var(--border-gray);">獲得pt</th>
+                                <th style="padding:8px; border:1px solid var(--border-gray);">ごみ拾い数</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+            `;
+            data.activities.forEach(act => {
+                html += `
+                    <tr>
+                        <td style="padding:8px; border:1px solid var(--border-gray); white-space:nowrap;">${escapeHtml(act.date_jst)}</td>
+                        <td style="padding:8px; border:1px solid var(--border-gray);">${escapeHtml(act.title || act.type || '清掃活動')}</td>
+                        <td style="padding:8px; border:1px solid var(--border-gray); text-align:right; font-weight:bold; color:var(--primary-green);">+${Number(act.points_earned) || 0} pt</td>
+                        <td style="padding:8px; border:1px solid var(--border-gray); text-align:right;">${Number(act.trash_count) || 0} 個</td>
+                    </tr>
+                `;
+            });
+            html += '</tbody></table></div>';
+        } else {
+            html += '<p style="color:var(--text-muted); font-size:0.9rem; padding:10px 0; text-align:center;">清掃・活動記録はまだありません。</p>';
+        }
+
+        if (data.reservations && data.reservations.length > 0) {
+            html += `
+                <h4 style="margin:20px 0 8px 0; font-size:1rem; font-weight:bold;">📅 イベント参加・予約 (${data.reservations.length}件)</h4>
+                <div style="overflow-x:auto;">
+                    <table style="width:100%; border-collapse:collapse; font-size:0.85rem; margin-top:5px;">
+                        <thead>
+                            <tr style="background:#f1f5f9;">
+                                <th style="padding:8px; border:1px solid var(--border-gray);">開催日時</th>
+                                <th style="padding:8px; border:1px solid var(--border-gray);">予約日時</th>
+                                <th style="padding:8px; border:1px solid var(--border-gray);">イベント名</th>
+                                <th style="padding:8px; border:1px solid var(--border-gray);">場所</th>
+                                <th style="padding:8px; border:1px solid var(--border-gray);">役割</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+            `;
+            data.reservations.forEach(r => {
+                html += `
+                    <tr>
+                        <td style="padding:8px; border:1px solid var(--border-gray); white-space:nowrap;">${escapeHtml(r.event_date || '-')}</td>
+                        <td style="padding:8px; border:1px solid var(--border-gray); white-space:nowrap;">${escapeHtml(r.reserved_at_jst || '-')}</td>
+                        <td style="padding:8px; border:1px solid var(--border-gray); font-weight:bold;">${escapeHtml(r.event_title)}</td>
+                        <td style="padding:8px; border:1px solid var(--border-gray);">${escapeHtml(r.location || '-')}</td>
+                        <td style="padding:8px; border:1px solid var(--border-gray);">${escapeHtml(r.participant_role || '-')}</td>
+                    </tr>
+                `;
+            });
+            html += '</tbody></table></div>';
+        }
+
+        body.innerHTML = html;
+    } catch (err) {
+        body.innerHTML = `<p style="color:var(--danger-red); text-align:center; padding:20px 0;">履歴の取得に失敗しました: ${escapeHtml(err.message)}</p>`;
+    }
+}
+
+function closeHistoryModal() {
+    document.getElementById('historyModal').classList.remove('active');
+}
+
+// --- 編集モーダル ---
+function openEditModal(userId, name, email, userType) {
+    const modal = document.getElementById('editModal');
+    const form = document.getElementById('editForm');
+   
+    form.action = `/admin/users/${userId}/edit`;
+    document.getElementById('editName').value = name;
+    document.getElementById('editEmail').value = email;
+    document.getElementById('editPassword').value = '';
+    document.getElementById('editPasswordConfirm').value = '';
+
+    const typeDisplay = document.getElementById('editUserTypeDisplay');
+    let badgeClass = 'badge-user';
+    if (userType === '管理者') badgeClass = 'badge-admin';
+    else if (userType === '団体') badgeClass = 'badge-organizer';
+    typeDisplay.innerHTML = `<span class="badge ${badgeClass}" style="font-size:0.85rem;">${userType}</span>`;
+
+    modal.classList.add('active');
+}
+
+function validateEditForm() {
+    const pw = document.getElementById('editPassword').value;
+    const confirm = document.getElementById('editPasswordConfirm').value;
+   
+    if (pw || confirm) {
+        if (!pw) {
+            alert('新しいパスワードを入力してください。');
+            document.getElementById('editPassword').focus();
+            return false;
+        }
+        if (!confirm) {
+            alert('確認のため、「新しいパスワード（確認用）」も入力してください。');
+            document.getElementById('editPasswordConfirm').focus();
+            return false;
+        }
+        if (pw !== confirm) {
+            alert('新しいパスワードと確認用パスワードが一致しません。\n内容をご確認の上、もう一度入力してください。');
+            document.getElementById('editPasswordConfirm').focus();
+            return false;
+        }
+        if (pw.length < 4) {
+            alert('セキュリティのため、パスワードは4文字以上で設定してください。');
+            document.getElementById('editPassword').focus();
+            return false;
+        }
+    }
+    return true;
+}
+
+function closeEditModal() {
+    document.getElementById('editModal').classList.remove('active');
+}
+
+// モーダル外クリックで閉じる & Escキーで閉じる
+window.addEventListener('click', function(e) {
+    const historyModal = document.getElementById('historyModal');
+    const editModal = document.getElementById('editModal');
+    if (e.target === historyModal) closeHistoryModal();
+    if (e.target === editModal) closeEditModal();
+});
+window.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+        closeHistoryModal();
+        closeEditModal();
+    }
+});
+</script>
 </body>
 </html>

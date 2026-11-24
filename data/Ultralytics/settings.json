@@ -1,0 +1,19 @@
+{
+  "settings_version": "0.0.8",
+  "datasets_dir": "C:\\Users\\admin\\flask2538077\\datasets",
+  "weights_dir": "weights",
+  "runs_dir": "runs",
+  "uuid": "ebcde663a9e8ce2afafc68f329e0b29aecd8e9a05c0ecc0572e6056da484e39e",
+  "sync": true,
+  "api_key": "",
+  "openai_api_key": "",
+  "clearml": true,
+  "comet": true,
+  "dvc": true,
+  "mlflow": true,
+  "raytune": true,
+  "tensorboard": false,
+  "wandb": false,
+  "vscode_msg": true,
+  "openvino_msg": true
+}
