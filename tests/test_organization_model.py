@@ -5421,6 +5421,48 @@ class OrganizationModelTests(unittest.TestCase):
                     "DELETE FROM regional_knowledge_cases WHERE title = 'テスト海岸プロムナードの夜間カップ散乱対策知見'"
                 )
 
+    def test_organizer_csr_dashboard_export_and_review_purpose_issue_display(self):
+        self._login_as(1)
+        try:
+            org_dash = self.client.get("/organizer")
+            self.assertEqual(org_dash.status_code, 200)
+            org_html = org_dash.get_data(as_text=True)
+            self.assertIn("地域貢献活動と実績ダッシュボード", org_html)
+            self.assertIn("団体活動実績（CSRレポート）をCSV出力", org_html)
+            self.assertIn("他地域の知見から企画", org_html)
+
+            csr_csv = self.client.get("/organizer/export/events.csv")
+            self.assertEqual(csr_csv.status_code, 200)
+            self.assertIn("text/csv", csr_csv.content_type)
+            self.assertIn("清掃目的・地域課題", csr_csv.data.decode("utf-8-sig"))
+
+            self.client.post(
+                "/organizer/events/new",
+                data={
+                    "csrf_token": "test-csrf-token",
+                    "name": "CSR検証クリーンイベント",
+                    "location": "臨港パーク北口",
+                    "category": "海岸清掃",
+                    "datetime": "2035-06-15T10:00",
+                    "bonus_points": "60",
+                    "reward_details": "地域カフェ割引券を配布",
+                    "purpose_issue": "海沿い遊歩道の飲料容器散乱を重点回収し再発要因を記録する",
+                },
+            )
+
+            self._login_as(2, "admin")
+            review_page = self.client.get("/admin/events/review")
+            self.assertEqual(review_page.status_code, 200)
+            review_html = review_page.get_data(as_text=True)
+            self.assertIn("CSR検証クリーンイベント", review_html)
+            self.assertIn("海沿い遊歩道の飲料容器散乱を重点回収し再発要因を記録する", review_html)
+            self.assertIn("海岸清掃", review_html)
+        finally:
+            with database_connection() as conn:
+                conn.execute(
+                    "DELETE FROM events WHERE name = 'CSR検証クリーンイベント'"
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

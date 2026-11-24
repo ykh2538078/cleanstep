@@ -79,11 +79,42 @@
     </nav>
     <div class="container">
         <section class="card" style="border-left:5px solid var(--primary-green);">
-            <h1 class="card-title">団体向け機能</h1>
-            <p>イベントの申請、開催状況の管理、申請済みイベントの編集を行えます。</p>
+            <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:12px;">
+                <div>
+                    <h1 class="card-title">🤝 {{ organization_name or '承認済み地域団体' }} — 地域貢献活動と実績ダッシュボード</h1>
+                    <p style="margin:4px 0 0; color:var(--text-muted);">
+                        イベントの企画・開催状況の管理、地域課題や他地域知見を活かした清掃企画、および地域貢献（CSR）実績の蓄積・出力を行えます。
+                    </p>
+                </div>
+                <a class="btn" href="{{ url_for('organizer_export_events_csv') }}" style="font-size:0.88rem;">
+                    📥 団体活動実績（CSRレポート）をCSV出力
+                </a>
+            </div>
+            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(170px, 1fr)); gap:14px; margin-top:18px;">
+                <div style="padding:14px; border:1px solid var(--border-gray); border-radius:8px; background:#f8fafc; text-align:center;">
+                    <div style="font-size:1.5rem; font-weight:800; color:var(--primary-green);">{{ event_count }} 件</div>
+                    <div style="font-size:0.85rem; color:var(--text-muted); margin-top:4px;">主催イベント総数</div>
+                </div>
+                <div style="padding:14px; border:1px solid var(--border-gray); border-radius:8px; background:#f8fafc; text-align:center;">
+                    <div style="font-size:1.5rem; font-weight:800; color:var(--primary-green);">{{ participant_count }} 名</div>
+                    <div style="font-size:0.85rem; color:var(--text-muted); margin-top:4px;">累計参加完了人数</div>
+                </div>
+                <div style="padding:14px; border:1px solid var(--border-gray); border-radius:8px; background:#f8fafc; text-align:center;">
+                    <div style="font-size:1.5rem; font-weight:800; color:#2980b9;">{{ active_reservations }} 名</div>
+                    <div style="font-size:0.85rem; color:var(--text-muted); margin-top:4px;">現在の参加予約者数</div>
+                </div>
+                <div style="padding:14px; border:1px solid var(--border-gray); border-radius:8px; background:#f8fafc; text-align:center;">
+                    <div style="font-size:1.5rem; font-weight:800; color:var(--primary-green);">{{ total_points_awarded or 0 }} pt</div>
+                    <div style="font-size:0.85rem; color:var(--text-muted); margin-top:4px;">地域へ還元したポイント</div>
+                </div>
+                <div style="padding:14px; border:1px solid var(--border-gray); border-radius:8px; background:#f8fafc; text-align:center;">
+                    <div style="font-size:1.5rem; font-weight:800; color:{{ 'var(--danger-red)' if pending_feedback_count else 'var(--primary-green)' }};">{{ pending_feedback_count }} 件</div>
+                    <div style="font-size:0.85rem; color:var(--text-muted); margin-top:4px;">未対応の振り返り回答</div>
+                </div>
+            </div>
         </section>
         <section class="card" style="border-left:5px solid var(--danger-red);" aria-label="団体向け機能">
-            <h2 class="card-title">イベント管理セクション</h2>
+            <h2 class="card-title">イベント・地域改善管理セクション</h2>
             <div class="section-grid">
             <article class="section-card">
                 <div class="section-title">イベント申請</div>
@@ -107,8 +138,29 @@
                 <p>住民から報告されたゴミ課題や再発地点を確認し、次回の清掃イベント企画に活かします。</p>
                 <a class="btn" href="{{ url_for('organizer_issues') }}">地域の課題と提案を見る</a>
             </article>
+            <article class="section-card">
+                <div class="section-title">地域間知見アーカイブ</div>
+                <p>他地域の成功事例や「失敗・改善からの学び」を検索し、ワンクリックでイベント企画に転用します。</p>
+                <a class="btn" href="{{ url_for('regional_knowledge_base') }}">他地域の知見から企画</a>
+            </article>
             </div>
         </section>
+        {% if recent_feedback %}
+        <section class="card" style="border-left:5px solid #2980b9;" aria-label="参加者からの振り返り">
+            <h2 class="card-title">💭 参加者からの最新の振り返り・気づき（未対応 {{ pending_feedback_count }} 件）</h2>
+            {% for fb in recent_feedback %}
+                <div style="padding:12px 0; border-bottom:1px solid var(--border-gray); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+                    <div style="font-size:0.9rem; line-height:1.6;">
+                        <strong>{{ fb.event_name }}</strong>（満足度 ★{{ fb.satisfaction }} · {{ fb.submitted_at|jst_datetime }}）
+                        {% if fb.noticed_issue %}<br>🔍 気づいた問題：{{ fb.noticed_issue }}{% endif %}
+                        {% if fb.next_improvement %}<br>🚀 次の改善案：{{ fb.next_improvement }}{% endif %}
+                        {% if fb.comment %}<br>💬 コメント：{{ fb.comment }}{% endif %}
+                    </div>
+                    <a class="btn" href="{{ url_for('organizer_event_participants', event_id=fb.event_id) }}" style="font-size:0.85rem;">確認・返信する</a>
+                </div>
+            {% endfor %}
+        </section>
+        {% endif %}
     </div>
 </body>
 </html>

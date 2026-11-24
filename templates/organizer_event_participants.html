@@ -34,19 +34,27 @@
     {{ event_map_link(event) }}
     <section>
         <table>
-            <thead><tr><th>氏名</th><th>メールアドレス</th><th>状態</th><th>予約日時</th><th>完了日時</th><th>獲得ポイント</th></tr></thead>
+            <thead><tr><th>氏名</th><th>メールアドレス</th><th>状態</th><th>役割 / 現場の変化記録</th><th>予約日時</th><th>完了日時</th><th>獲得ポイント</th></tr></thead>
             <tbody>
             {% for participant in participants %}
                 <tr>
                     <td>{{ participant.name }}</td>
                     <td>{{ participant.email }}</td>
                     <td>{{ {'reserved': '予約中', 'completed': '参加完了', 'cancelled': 'キャンセル'}[participant.status] }}</td>
+                    <td>
+                        {% if participant.participant_role %}<div>役割: <strong>{{ participant.participant_role }}</strong></div>{% endif %}
+                        {% if participant.before_state or participant.after_state %}
+                            <small class="muted">{{ participant.before_state or '—' }} → {{ participant.after_state or '—' }}</small>
+                        {% elif not participant.participant_role %}
+                            —
+                        {% endif %}
+                    </td>
                     <td>{{ participant.reserved_at }}</td>
                     <td>{{ participant.completed_at or '—' }}</td>
                     <td>{{ participant.points_earned if participant.points_earned is not none else '—' }}</td>
                 </tr>
             {% else %}
-                <tr><td colspan="6">予約者・参加者はいません。</td></tr>
+                <tr><td colspan="7">予約者・参加者はいません。</td></tr>
             {% endfor %}
             </tbody>
         </table>
@@ -70,7 +78,13 @@
                 <h3>改善コメントと対応状況（回答者名は表示しません）</h3>
                 {% for feedback in feedback_comments %}
                     <article class="feedback-item">
-                        <blockquote>{{ feedback.comment }}</blockquote>
+                        <blockquote>
+                            {% if feedback.noticed_issue %}<div>🔍 <strong>気づいた問題：</strong>{{ feedback.noticed_issue }}</div>{% endif %}
+                            {% if feedback.suspected_cause %}<div>💡 <strong>原因の考察：</strong>{{ feedback.suspected_cause }}</div>{% endif %}
+                            {% if feedback.collaboration_note %}<div>🤝 <strong>協力した点：</strong>{{ feedback.collaboration_note }}</div>{% endif %}
+                            {% if feedback.next_improvement %}<div>🚀 <strong>次の改善案：</strong>{{ feedback.next_improvement }}</div>{% endif %}
+                            {% if feedback.comment %}<div>{{ feedback.comment }}</div>{% endif %}
+                        </blockquote>
                         <form class="feedback-form" method="post" action="{{ url_for('organizer_event_feedback_update', event_id=event.id, feedback_id=feedback.id) }}">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                             <label>対応状況

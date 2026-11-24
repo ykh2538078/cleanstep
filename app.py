@@ -8275,6 +8275,11 @@ def organizer_dashboard():
     conn = get_db()
     try:
         organization_id = get_user_organization_id(conn, session['user_id'])
+        org_row = conn.execute(
+            'SELECT name FROM organizations WHERE id = ?',
+            (organization_id,),
+        ).fetchone()
+        organization_name = org_row['name'] if org_row else '承認済み地域団体'
         event_count = conn.execute(
             'SELECT COUNT(*) FROM events WHERE organization_id = ?',
             (organization_id,),
@@ -8306,6 +8311,12 @@ def organizer_dashboard():
             JOIN events e ON e.id = a.event_id
             WHERE e.organization_id = ? AND a.type = 'event'
         ''', (organization_id,)).fetchone()[0]
+        total_points_awarded = conn.execute('''
+            SELECT COALESCE(SUM(a.points_earned), 0)
+            FROM activity_history a
+            JOIN events e ON e.id = a.event_id
+            WHERE e.organization_id = ? AND a.type = 'event'
+        ''', (organization_id,)).fetchone()[0]
         pending_feedback_count = conn.execute('''
             SELECT COUNT(*)
             FROM event_feedback f
@@ -8313,8 +8324,8 @@ def organizer_dashboard():
             WHERE e.organization_id = ? AND f.action_status = 'pending'
         ''', (organization_id,)).fetchone()[0]
         recent_feedback = conn.execute('''
-            SELECT f.event_id, f.comment, f.satisfaction, f.submitted_at,
-                   e.name AS event_name
+            SELECT f.event_id, f.comment, f.noticed_issue, f.next_improvement,
+                   f.satisfaction, f.submitted_at, e.name AS event_name
             FROM event_feedback f
             JOIN events e ON e.id = f.event_id
             WHERE e.organization_id = ? AND f.action_status = 'pending'
@@ -8323,15 +8334,54 @@ def organizer_dashboard():
         ''', (organization_id,)).fetchall()
         return render_template(
             'organizer_dashboard.html',
+            organization_name=organization_name,
             event_count=event_count,
             editable_event_count=editable_event_count,
             active_reservations=active_reservations,
             participant_count=participant_count,
+            total_points_awarded=total_points_awarded,
             pending_feedback_count=pending_feedback_count,
             recent_feedback=recent_feedback,
         )
     finally:
         conn.close()
+
+
+@app.route('/organizer/export/events.csv')
+@organizer_required
+def organizer_export_events_csv():
+    conn = get_db()
+    try:
+        organization_id = get_user_organization_id(conn, session['user_id'])
+        rows = conn.execute('''
+            SELECT e.id, e.name, e.category, e.datetime, e.location,
+                   e.purpose_issue, e.review_status, e.status,
+                   (SELECT COUNT(*) FROM event_reservations r
+                    WHERE r.event_id = e.id AND r.status = 'reserved') AS reserved_count,
+                   (SELECT COUNT(*) FROM activity_history a
+                    WHERE a.event_id = e.id AND a.type = 'event') AS participant_count,
+                   (SELECT COALESCE(SUM(a.points_earned), 0) FROM activity_history a
+                    WHERE a.event_id = e.id AND a.type = 'event') AS points_awarded
+            FROM events e
+            WHERE e.organization_id = ?
+            ORDER BY e.datetime DESC, e.id DESC
+        ''', (organization_id,)).fetchall()
+    finally:
+        conn.close()
+    headers = [
+        'イベントID', 'イベント名', 'ジャンル', '開催日時', '開催場所',
+        '清掃目的・地域課題', '現在予約者数', '参加完了人数',
+        '付与ポイント合計', '審査状態', '開催状態',
+    ]
+    csv_rows = [
+        [
+            r['id'], r['name'], r['category'], r['datetime'], r['location'],
+            r['purpose_issue'] or '', r['reserved_count'], r['participant_count'],
+            r['points_awarded'], r['review_status'], r['status'],
+        ]
+        for r in rows
+    ]
+    return _build_csv_response('cleanstep_organizer_csr_report.csv', headers, csv_rows)
 
 @app.route('/organizer/events/edit')
 @organizer_required
@@ -8379,7 +8429,10 @@ def organizer_event_participants(event_id):
                         ELSE r.status END AS status,
                    r.reserved_at,
                    COALESCE(r.completed_at, a.date) AS completed_at,
-                   u.name, NULL AS email, a.points_earned
+                   u.name, NULL AS email, a.points_earned,
+                   COALESCE(NULLIF(a.participant_role, ''), NULLIF(r.participant_role, ''), '') AS participant_role,
+                   COALESCE(a.before_state, '') AS before_state,
+                   COALESCE(a.after_state, '') AS after_state
             FROM (
                 SELECT user_id FROM event_reservations WHERE event_id = ?
                 UNION
@@ -8400,8 +8453,8 @@ def organizer_event_participants(event_id):
                    SUM(CASE WHEN next_participation = 'yes' THEN 1 ELSE 0 END) AS yes_count,
                    SUM(CASE WHEN next_participation = 'maybe' THEN 1 ELSE 0 END) AS maybe_count,
                    SUM(CASE WHEN next_participation = 'no' THEN 1 ELSE 0 END) AS no_count,
-                   SUM(CASE WHEN trim(comment) <> '' THEN 1 ELSE 0 END) AS comment_count,
-                   SUM(CASE WHEN trim(comment) <> '' AND action_status = 'addressed'
+                   SUM(CASE WHEN trim(comment) <> '' OR trim(noticed_issue) <> '' OR trim(next_improvement) <> '' THEN 1 ELSE 0 END) AS comment_count,
+                   SUM(CASE WHEN (trim(comment) <> '' OR trim(noticed_issue) <> '' OR trim(next_improvement) <> '') AND action_status = 'addressed'
                             THEN 1 ELSE 0 END) AS addressed_comments
             FROM event_feedback WHERE event_id = ?
         ''', (event_id,)).fetchone()
@@ -8418,9 +8471,18 @@ def organizer_event_participants(event_id):
             if feedback_summary['comment_count'] else 0
         )
         feedback_comments = conn.execute('''
-            SELECT id, comment, action_status, action_note, reviewed_at
+            SELECT id, comment, noticed_issue, suspected_cause,
+                   collaboration_note, next_improvement,
+                   action_status, action_note, reviewed_at
             FROM event_feedback
-            WHERE event_id = ? AND trim(comment) <> ''
+            WHERE event_id = ?
+              AND (
+                  trim(comment) <> ''
+                  OR trim(noticed_issue) <> ''
+                  OR trim(suspected_cause) <> ''
+                  OR trim(collaboration_note) <> ''
+                  OR trim(next_improvement) <> ''
+              )
             ORDER BY submitted_at DESC
         ''', (event_id,)).fetchall()
         return render_template(

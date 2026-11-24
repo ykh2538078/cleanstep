@@ -26,8 +26,13 @@
     {% for event in events %}
         <article>
             <h2>{{ event.name }}</h2>
-            <p class="meta">主催団体: {{ event.organization_name or '団体情報なし' }} / 申請担当: {{ event.organizer_name or '不明' }}</p>
+            <p class="meta">主催団体: {{ event.organization_name or '団体情報なし' }} / 申請担当: {{ event.organizer_name or '不明' }} / ジャンル: <strong>{{ event.category or 'その他' }}</strong></p>
             <p class="meta">開催日時: {{ event.datetime }} / 場所: {{ event.location }} / 参加ボーナス: {{ event.bonus_points }} pt</p>
+            {% if event.purpose_issue %}
+                <p style="padding:10px 12px; border-radius:6px; background:#f3f8f5; border-left:4px solid #257a52;">
+                    <strong>🎯 清掃目的・対象の地域課題:</strong><br>{{ event.purpose_issue }}
+                </p>
+            {% endif %}
             <p><strong>申請された参加者向け特典:</strong><br>{{ event.reward_details or '記載なし' }}</p>
             {{ event_map_link(event) }}
             <p>現在の状態: {{ '審査待ち' if event.review_status == 'pending' else '審査中' }} / 予約者: {{ event.reservations }} 人</p>
